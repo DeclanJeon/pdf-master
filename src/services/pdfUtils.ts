@@ -388,6 +388,7 @@ export const reorderPdf = async (
 };
 
 // 3. 워터마크 (타일 패턴 포함)
+// Canvas로 텍스트 렌더링 → 이미지 임베딩 방식 (한국어/영어 모두 지원)
 export const addWatermark = async (
   file: File,
   text: string,
@@ -396,148 +397,135 @@ export const addWatermark = async (
   const arrayBuffer = await file.arrayBuffer();
   const doc = await PDFDocument.load(arrayBuffer);
 
-  // 기본 폰트 로드
-  let font;
-  try {
-    font = await doc.embedFont(StandardFonts.HelveticaBold);
-  } catch (e) {
-    console.warn("기본 폰트 로드 실패:", e);
-  }
+  // 워터마크 텍스트를 Canvas로 렌더링하여 이미지로 변환
+  const wmColor = options.color || '#808080';
+  const imageBytes = await renderWatermarkToPng(text, options.size, wmColor);
+  const wmImage = await doc.embedPng(imageBytes);
 
-  // 한글이 포함된 경우, 기본 폰트로 대체
-  const hasNonLatinChars = /[^\x00-\x7F]/.test(text);
+  // 이미지 원본 크기
+  const imgW = wmImage.width;
+  const imgH = wmImage.height;
+
+  // 실제 배치 크기 (PDF 좌표계에 맞게 변환)
+  // Canvas는 96dpi, PDF는 72dpi → 0.75 배율
+  const scaleFactor = 72 / 96;
+  const displayW = imgW * scaleFactor;
+  const displayH = imgH * scaleFactor;
 
   const pages = doc.getPages();
 
-  // 텍스트 너비 계산 (다국어 지원을 위해 안전한 방식 사용)
-  const getTextWidth = (text: string, fontSize: number) => {
-    // 비라틴 문자가 있으면 문자당 너비를 추정
-    if (hasNonLatinChars) {
-      // 한글, 일본어 등은 더 넓은 문자 폭을 가짐
-      return fontSize * text.length * 0.6; // 추정치 개선
-    } else {
-      // 라틴 문자는 정확한 폰트 메트릭 사용
-      return font.widthOfTextAtSize(text, fontSize);
-    }
-  };
-
-  pages.forEach((page) => {
+  for (const page of pages) {
     const { width, height } = page.getSize();
-    const textWidth = getTextWidth(text, options.size);
-    const textHeight = options.size;
-
-    // 페이지 크기에 비례하여 워터마크 크기 조정
-    const scaleFactor = Math.min(width, height) / 1000; // 페이지 크기에 따른 스케일 팩터
-    const adjustedSize = Math.max(
-      options.size * (1 + scaleFactor),
-      options.size
-    );
-    const adjustedTextWidth = getTextWidth(text, adjustedSize);
 
     if (options.isTile) {
-      // 타일 패턴 로직 - 간격을 동적으로 조정
-      const gap = Math.max(adjustedTextWidth * 0.5, 100); // 텍스트 너비의 50% 또는 최소 100px
-      for (let x = -width; x < width * 2; x += adjustedTextWidth + gap) {
-        for (let y = -height; y < height * 2; y += adjustedSize + gap) {
-          if (hasNonLatinChars) {
-            // 다국어 텍스트는 이미지로 변환하여 워터마크로 사용
-            console.warn("다국어 워터마크는 현재 영문만 지원됩니다.");
-            // 대신 사각형으로 워터마크 표시
-            const rectWidth = Math.max(adjustedTextWidth, 150);
-            const rectHeight = adjustedSize;
-
-            page.drawRectangle({
-              x,
-              y,
-              width: rectWidth,
-              height: rectHeight,
-              color: rgb(0.7, 0.7, 0.7),
-              opacity: options.opacity,
-              rotate: degrees(-45),
-            });
-          } else {
-            // 라틴 문자는 직접 텍스트 그리기
-            try {
-              page.drawText(text, {
-                x,
-                y,
-                size: adjustedSize,
-                font,
-                color: rgb(0.7, 0.7, 0.7), // 회색
-                opacity: options.opacity,
-                rotate: degrees(-45), // 대각선
-              });
-            } catch (e) {
-              // 텍스트 렌더링 실패시 사각형으로 대체
-              console.warn("워터마크 텍스트 렌더링 실패, 사각형으로 대체:", e);
-              const rectWidth = Math.max(adjustedTextWidth, 150);
-              const rectHeight = adjustedSize;
-
-              page.drawRectangle({
-                x,
-                y,
-                width: rectWidth,
-                height: rectHeight,
-                color: rgb(0.7, 0.7, 0.7),
-                opacity: options.opacity,
-                rotate: degrees(-45),
-              });
-            }
-          }
+      // 타일 패턴
+      const gapX = displayW * 0.6;
+      const gapY = displayH * 1.5;
+      for (let x = -displayW; x < width + displayW; x += displayW + gapX) {
+        for (let y = -displayH; y < height + displayH; y += displayH + gapY) {
+          page.drawImage(wmImage, {
+            x,
+            y,
+            width: displayW,
+            height: displayH,
+            opacity: options.opacity,
+            rotate: degrees(-30),
+          });
         }
       }
     } else {
-      // 중앙 하나
-      if (hasNonLatinChars) {
-        // 다국어 텍스트는 이미지로 변환하여 워터마크로 사용
-        console.warn("다국어 워터마크는 현재 영문만 지원됩니다.");
-        // 대신 사각형으로 워터마크 표시
-        const rectWidth = Math.max(adjustedTextWidth, 150);
-        const rectHeight = adjustedSize;
-
-        page.drawRectangle({
-          x: width / 2 - rectWidth / 2,
-          y: height / 2 - rectHeight / 2,
-          width: rectWidth,
-          height: rectHeight,
-          color: rgb(0.7, 0.7, 0.7),
-          opacity: options.opacity,
-          rotate: degrees(-45),
-        });
-      } else {
-        // 라틴 문자는 직접 텍스트 그리기
-        try {
-          page.drawText(text, {
-            x: width / 2 - adjustedTextWidth / 2,
-            y: height / 2,
-            size: adjustedSize,
-            font,
-            color: rgb(0.7, 0.7, 0.7),
-            opacity: options.opacity,
-            rotate: degrees(-45),
-          });
-        } catch (e) {
-          // 텍스트 렌더링 실패시 사각형으로 대체
-          console.warn("워터마크 텍스트 렌더링 실패, 사각형으로 대체:", e);
-          const rectWidth = Math.max(adjustedTextWidth, 150);
-          const rectHeight = adjustedSize;
-
-          page.drawRectangle({
-            x: width / 2 - rectWidth / 2,
-            y: height / 2 - rectHeight / 2,
-            width: rectWidth,
-            height: rectHeight,
-            color: rgb(0.7, 0.7, 0.7),
-            opacity: options.opacity,
-            rotate: degrees(-45),
-          });
-        }
-      }
+      // 중앙 단일
+      page.drawImage(wmImage, {
+        x: width / 2 - displayW / 2,
+        y: height / 2 - displayH / 2,
+        width: displayW,
+        height: displayH,
+        opacity: options.opacity,
+        rotate: degrees(-30),
+      });
     }
-  });
+  }
 
   return doc.save();
 };
+
+/**
+ * 워터마크 텍스트를 Canvas로 렌더링 → PNG Uint8Array 반환
+ * 한국어·영어·특수문자 모두 브라우저 폰트로 정확하게 렌더링
+ */
+export async function renderWatermarkToPng(
+  text: string,
+  fontSize: number,
+  color: string = '#808080'
+): Promise<Uint8Array> {
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d')!;
+
+  // 폰트 설정 (한글 + 영문 모두 지원하는 시스템 폰트 스택)
+  const fontFamily = `'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', 'Helvetica Neue', Arial, sans-serif`;
+  ctx.font = `bold ${fontSize * 2}px ${fontFamily}`;
+
+  const metrics = ctx.measureText(text);
+  const padding = fontSize * 0.5;
+
+  // 실제 텍스트 바운딩 박스 (더 정확한 측정)
+  const textWidth = metrics.width + padding * 2;
+  const textHeight = fontSize * 2 * 1.4 + padding * 2; // line height ~1.4
+
+  canvas.width = Math.ceil(textWidth);
+  canvas.height = Math.ceil(textHeight);
+
+  // 다시 폰트 설정 (canvas 리사이즈 후 초기화됨)
+  ctx.font = `bold ${fontSize * 2}px ${fontFamily}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color;
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(async (blob) => {
+      if (!blob) { reject(new Error('Canvas toBlob failed')); return; }
+      const buf = await blob.arrayBuffer();
+      resolve(new Uint8Array(buf));
+    }, 'image/png');
+  });
+}
+
+/**
+ * 워터마크 미리보기용 data URL 생성 (UI 전용)
+ */
+export function renderWatermarkPreviewUrl(
+  text: string,
+  fontSize: number,
+  color: string = '#808080',
+  opacity: number = 0.15
+): string {
+  if (!text.trim()) return '';
+
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d')!;
+
+  const fontFamily = `'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', Arial, sans-serif`;
+  const drawSize = fontSize * 2;
+  ctx.font = `bold ${drawSize}px ${fontFamily}`;
+
+  const metrics = ctx.measureText(text);
+  const padding = fontSize * 0.5;
+  const textWidth = metrics.width + padding * 2;
+  const textHeight = drawSize * 1.4 + padding * 2;
+
+  canvas.width = Math.ceil(textWidth);
+  canvas.height = Math.ceil(textHeight);
+
+  ctx.font = `bold ${drawSize}px ${fontFamily}`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.globalAlpha = opacity;
+  ctx.fillStyle = color;
+  ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+
+  return canvas.toDataURL('image/png');
+}
 
 // 4. PDF 잠금
 export const encryptPdf = async (

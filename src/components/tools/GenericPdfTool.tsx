@@ -17,6 +17,7 @@ import {
   compressPdf,
   encryptPdf,
   unlockPdf,
+  renderWatermarkPreviewUrl,
 } from '@/services/pdfUtils'
 
 type Step = 'upload' | 'config' | 'processing' | 'done'
@@ -225,6 +226,42 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
             autoFocus
           />
         </div>
+
+        {/* 워터마크 미리보기 */}
+        {watermarkText.trim() && (
+          <div>
+            <Label className="text-base font-semibold mb-2 block">미리보기</Label>
+            <div className="rounded-lg border-2 border-gray-200 bg-gray-50 p-6 flex items-center justify-center min-h-[120px] relative overflow-hidden">
+              {/* 모의 페이지 배경에 패턴 표시 */}
+              <div className="absolute inset-0 flex items-center justify-center" style={{ transform: 'rotate(-30deg)' }}>
+                {isTile ? (
+                  <div className="grid grid-cols-3 gap-x-16 gap-y-12 opacity-20">
+                    {Array.from({ length: 9 }, (_, i) => (
+                      <img
+                        key={i}
+                        src={renderWatermarkPreviewUrl(watermarkText, watermarkSize, '#666', 1)}
+                        alt="워터마크 미리보기"
+                        className="h-auto max-w-[120px]"
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <img
+                    src={renderWatermarkPreviewUrl(watermarkText, watermarkSize, '#666', watermarkOpacity * 3)}
+                    alt="워터마크 미리보기"
+                    className="max-w-[70%] h-auto"
+                  />
+                )}
+              </div>
+              {/* 페이지 중앙 표시선 */}
+              <div className="absolute inset-4 border border-dashed border-gray-300 rounded pointer-events-none" />
+              <span className="text-xs text-gray-400 relative z-10">A4 페이지</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              {isTile ? '페이지 전체 반복 패턴' : '페이지 중앙 단일 배치'} · {watermarkSize}pt · 투명도 {Math.round(watermarkOpacity * 100)}%
+            </p>
+          </div>
+        )}
 
         <div>
           <Label>투명도: {Math.round(watermarkOpacity * 100)}%</Label>
