@@ -453,9 +453,9 @@ export function StampTool() {
             <Label>도장 크기: {stampScale}x</Label>
             <Slider
               value={[stampScale]}
-              onValueChange={([v]) => {
-                setStampScale(v)
-                setStampPos(null) // 크기 변경 시 위치 리셋
+              onValueChange={(v) => {
+                setStampScale(Array.isArray(v) ? v[0] : v)
+                setStampPos(null)
               }}
               min={0.5}
               max={3}
@@ -467,7 +467,7 @@ export function StampTool() {
             <Label>투명도: {Math.round(stampOpacity * 100)}%</Label>
             <Slider
               value={[stampOpacity]}
-              onValueChange={([v]) => setStampOpacity(v)}
+              onValueChange={(v) => setStampOpacity(Array.isArray(v) ? v[0] : v)}
               min={0.1}
               max={1}
               step={0.05}
