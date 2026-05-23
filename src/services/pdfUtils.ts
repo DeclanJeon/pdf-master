@@ -458,25 +458,38 @@ export async function renderWatermarkToPng(
   fontSize: number,
   color: string = '#808080'
 ): Promise<Uint8Array> {
+  // 폰트가 로드될 때까지 대기 (필수 — 안 하면 measureText가 0 반환)
+  await document.fonts.ready;
+
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d')!;
 
-  // 폰트 설정 (한글 + 영문 모두 지원하는 시스템 폰트 스택)
+  // 폰트 스택 (한글 + 영문 모두 지원)
   const fontFamily = `'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', 'Helvetica Neue', Arial, sans-serif`;
-  ctx.font = `bold ${fontSize * 2}px ${fontFamily}`;
+  // Canvas(96dpi) → PDF(72dpi) 변환 배율: 96/72 = 4/3
+  const canvasFontSize = Math.round(fontSize * 4 / 3);
+  ctx.font = `bold ${canvasFontSize}px ${fontFamily}`;
 
   const metrics = ctx.measureText(text);
-  const padding = fontSize * 0.5;
+  
+  // metrics.width가 0이면 폰트 로딩 실패 → fallback
+  if (metrics.width < 1) {
+    console.warn('renderWatermarkToPng: font metrics returned 0, using fallback size');
+    // fallback: 대충 글자당 너비 추정
+    const estimatedWidth = fontSize * text.length * 0.8;
+    canvas.width = Math.ceil(estimatedWidth * 4 / 3 + fontSize);
+    canvas.height = Math.ceil(fontSize * 4 / 3 * 2);
+  } else {
+    const padding = fontSize * 0.3;
+    const textWidth = metrics.width + padding * 2;
+    const textHeight = canvasFontSize * 1.3 + padding * 2;
 
-  // 실제 텍스트 바운딩 박스 (더 정확한 측정)
-  const textWidth = metrics.width + padding * 2;
-  const textHeight = fontSize * 2 * 1.4 + padding * 2; // line height ~1.4
+    canvas.width = Math.max(Math.ceil(textWidth), 50);
+    canvas.height = Math.max(Math.ceil(textHeight), 20);
+  }
 
-  canvas.width = Math.ceil(textWidth);
-  canvas.height = Math.ceil(textHeight);
-
-  // 다시 폰트 설정 (canvas 리사이즈 후 초기화됨)
-  ctx.font = `bold ${fontSize * 2}px ${fontFamily}`;
+  // canvas 리사이즈 후 폰트 재설정
+  ctx.font = `bold ${canvasFontSize}px ${fontFamily}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillStyle = color;
@@ -506,18 +519,22 @@ export function renderWatermarkPreviewUrl(
   const ctx = canvas.getContext('2d')!;
 
   const fontFamily = `'Noto Sans KR', 'Malgun Gothic', 'Apple SD Gothic Neo', Arial, sans-serif`;
-  const drawSize = fontSize * 2;
-  ctx.font = `bold ${drawSize}px ${fontFamily}`;
+  const canvasFontSize = Math.round(fontSize * 4 / 3);
+  ctx.font = `bold ${canvasFontSize}px ${fontFamily}`;
 
   const metrics = ctx.measureText(text);
-  const padding = fontSize * 0.5;
-  const textWidth = metrics.width + padding * 2;
-  const textHeight = drawSize * 1.4 + padding * 2;
+  
+  if (metrics.width < 1) {
+    // fallback dimensions
+    canvas.width = Math.ceil(fontSize * text.length * 0.8 * 4 / 3 + fontSize);
+    canvas.height = Math.ceil(fontSize * 4 / 3 * 2);
+  } else {
+    const padding = fontSize * 0.3;
+    canvas.width = Math.max(Math.ceil(metrics.width + padding * 2), 50);
+    canvas.height = Math.max(Math.ceil(canvasFontSize * 1.3 + padding * 2), 20);
+  }
 
-  canvas.width = Math.ceil(textWidth);
-  canvas.height = Math.ceil(textHeight);
-
-  ctx.font = `bold ${drawSize}px ${fontFamily}`;
+  ctx.font = `bold ${canvasFontSize}px ${fontFamily}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.globalAlpha = opacity;
