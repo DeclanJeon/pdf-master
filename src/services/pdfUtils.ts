@@ -711,6 +711,8 @@ export const unlockPdf = async (
 };
 
 // 6. 이미지(서명)를 PDF 특정 좌표에 합성
+// x, y: PDF pt 단위의 절대 좌표 (좌상단 기준)
+// img: data URL (data:image/...) 또는 blob URL 모두 지원
 export const embedImagesOnPdf = async (
   file: File,
   images: { x: number; y: number; img: string; pageIndex: number }[]
@@ -725,29 +727,46 @@ export const embedImagesOnPdf = async (
     }
 
     const page = pages[item.pageIndex];
-    const { width, height } = page.getSize();
-    let imageEmbed;
+    const { height } = page.getSize();
 
-    const base64Data = item.img.split(",")[1];
-    const imageBytes = Uint8Array.from(atob(base64Data), (c) =>
-      c.charCodeAt(0)
-    );
+    // 이미지 데이터 가져오기 (data URL 또는 blob URL 모두 지원)
+    let imageBytes: Uint8Array;
+    let isPng = false;
 
-    if (item.img.startsWith("data:image/png")) {
-      imageEmbed = await doc.embedPng(imageBytes);
+    if (item.img.startsWith("data:")) {
+      // data URL → base64 decode
+      const match = item.img.match(/^data:image\/(png|jpe?g);base64,(.+)$/);
+      if (match) {
+        isPng = match[1] === 'png';
+        imageBytes = Uint8Array.from(atob(match[2]), (c) => c.charCodeAt(0));
+      } else {
+        // fallback: comma split
+        const base64Data = item.img.split(",")[1];
+        isPng = item.img.includes("data:image/png");
+        imageBytes = Uint8Array.from(atob(base64Data), (c) => c.charCodeAt(0));
+      }
     } else {
-      imageEmbed = await doc.embedJpg(imageBytes);
+      // blob URL 또는 http URL → fetch
+      const res = await fetch(item.img);
+      const buf = await res.arrayBuffer();
+      imageBytes = new Uint8Array(buf);
+      isPng = item.img.toLowerCase().endsWith('.png') || res.headers.get('content-type')?.includes('png') || false;
     }
+
+    const imageEmbed = isPng
+      ? await doc.embedPng(imageBytes)
+      : await doc.embedJpg(imageBytes);
 
     const signWidth = 150;
     const signHeight = (imageEmbed.height / imageEmbed.width) * signWidth;
 
-    const pdfX = (item.x / 100) * width;
-    const pdfY = height - (item.y / 100) * height;
+    // x, y는 PDF pt 좌표 (좌상단 기준) → pdf-lib는 좌하단 기준이므로 y 변환
+    const pdfX = item.x;
+    const pdfY = height - item.y - signHeight;
 
     page.drawImage(imageEmbed, {
-      x: pdfX - signWidth / 2,
-      y: pdfY - signHeight / 2,
+      x: pdfX,
+      y: pdfY,
       width: signWidth,
       height: signHeight,
     });

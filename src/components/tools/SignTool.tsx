@@ -105,20 +105,17 @@ export function SignTool() {
 
     // 서명 이미지를 Canvas에서 추출
     const signCanvas = canvasRef.current
-    const signBlob = await new Promise<Blob>((resolve) => {
-      signCanvas.toBlob((blob) => resolve(blob!), 'image/png')
-    })
-    const signUrl = URL.createObjectURL(signBlob)
-
     setStep('processing')
     try {
-      // PDF 마지막 페이지 우하단에 서명 삽입
+      // 서명 이미지를 data URL로 변환
+      const signDataUrl = signCanvas.toDataURL('image/png')
+
       const result = await embedImagesOnPdf(file, [
         {
-          x: 380,
-          y: 80,
-          img: signUrl,
-          pageIndex: 0, // 첫 페이지 (0-indexed)
+          x: 380,  // 좌측에서 380pt (A4 우하단)
+          y: 80,   // 하단에서 80pt (A4 우하단)
+          img: signDataUrl,
+          pageIndex: 0,
         },
       ])
 
@@ -126,7 +123,6 @@ export function SignTool() {
       setResultBlob(blob)
       setStep('done')
       toast.success('서명이 완료되었습니다.')
-      URL.revokeObjectURL(signUrl)
     } catch (e) {
       console.error(e)
       toast.error('서명 처리 중 오류가 발생했습니다.')
