@@ -5,10 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
-import { maskPdfPersonalInfo } from '@/services/maskingServiceV2'
-import { extractTextFromPdf, previewMasking } from '@/services/maskingService'
-import type { PersonalInfoType } from '@/services/maskingService'
-import { typeLabels, typeColors } from '@/services/maskingService'
+import { maskPdfPersonalInfo, extractTextFromPdf, previewMasking, typeLabels, typeColors, type PersonalInfoType } from '@/services/maskingServiceV2'
 import { toast } from 'sonner'
 
 type Step = 'upload' | 'preview' | 'processing' | 'done'
@@ -179,7 +176,7 @@ export function MaskingTool() {
                     <Badge variant="outline" className="text-xs">
                       {typeLabels[item.type as PersonalInfoType]}
                     </Badge>
-                    <span className="font-mono text-muted-foreground">{item.originalText}</span>
+                    <span className="font-mono text-muted-foreground">{item.text}</span>
                     <span className="text-gray-400">→</span>
                     <span className="font-mono font-medium">{item.maskedText}</span>
                   </div>

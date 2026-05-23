@@ -18,6 +18,7 @@ const PORT = process.env.PORT || 3001;
 // --- Config ---
 const HWPFORGE_PATH = process.env.HWPFORGE_PATH || path.resolve(__dirname, '../../pdf-master-references/HwpForge/target/release/hwpforge');
 const SOFFICE_PATH = process.env.SOFFICE_PATH || 'soffice';
+const HWPX2HTML_PATH = process.env.HWPX2HTML_PATH || path.resolve(__dirname, 'hwpx2html.py');
 const MD2HTML_PATH = process.env.MD2HTML_PATH || path.resolve(__dirname, '../scripts/md2html.py');
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.resolve(__dirname, '../uploads');
 const OUTPUT_DIR = process.env.OUTPUT_DIR || path.resolve(__dirname, '../outputs');
@@ -40,20 +41,48 @@ for (const d of [UPLOAD_DIR, OUTPUT_DIR]) {
   if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
 }
 
-// --- Cleanup old files every 10 min ---
-const MAX_FILE_AGE_MS = 30 * 60 * 1000; // 30 min
+// --- Cleanup old files every 5 min ---
+const MAX_FILE_AGE_MS = 10 * 60 * 1000; // 10 min — delete everything after download
+function rmDirRecursive(dir: string) {
+  if (!fs.existsSync(dir)) return;
+  for (const f of fs.readdirSync(dir)) {
+    const fp = path.join(dir, f);
+    try {
+      const stat = fs.statSync(fp);
+      if (stat.isDirectory()) {
+        rmDirRecursive(fp);
+        fs.rmdirSync(fp);
+      } else {
+        fs.unlinkSync(fp);
+      }
+    } catch { /* skip */ }
+  }
+}
 setInterval(() => {
   const now = Date.now();
-  for (const dir of [UPLOAD_DIR, OUTPUT_DIR]) {
-    for (const f of fs.readdirSync(dir)) {
-      const fp = path.join(dir, f);
-      try {
-        const stat = fs.statSync(fp);
-        if (now - stat.mtimeMs > MAX_FILE_AGE_MS) fs.unlinkSync(fp);
-      } catch { /* skip */ }
-    }
+  // Clean uploads dir (direct files)
+  for (const f of fs.readdirSync(UPLOAD_DIR)) {
+    const fp = path.join(UPLOAD_DIR, f);
+    try {
+      if (now - fs.statSync(fp).mtimeMs > MAX_FILE_AGE_MS) fs.unlinkSync(fp);
+    } catch { /* skip */ }
   }
-}, 10 * 60 * 1000);
+  // Clean outputs dir (job subdirectories)
+  for (const jobId of fs.readdirSync(OUTPUT_DIR)) {
+    const jobDir = path.join(OUTPUT_DIR, jobId);
+    try {
+      const stat = fs.statSync(jobDir);
+      if (stat.isDirectory() && now - stat.mtimeMs > MAX_FILE_AGE_MS) {
+        rmDirRecursive(jobDir);
+        fs.rmdirSync(jobDir);
+      }
+    } catch { /* skip */ }
+  }
+  // Clean stale in-memory jobs
+  for (const [id, job] of jobs) {
+    if (now - job.createdAt > MAX_FILE_AGE_MS) jobs.delete(id);
+  }
+}, 5 * 60 * 1000);
 
 // ============================================================
 // HWP → PDF Conversion Pipeline
@@ -79,6 +108,8 @@ app.post('/api/convert/hwp-to-pdf', upload.single('file'), async (req: Request, 
     return res.status(400).json({ error: 'HWP 파일을 업로드해주세요.' });
   }
 
+  console.log(`[UPLOAD] file=${req.file.originalname} size=${req.file.size} mimetype=${req.file.mimetype}`);
+
   const jobId = nanoid(16);
   const jobDir = path.join(OUTPUT_DIR, jobId);
   fs.mkdirSync(jobDir, { recursive: true });
@@ -92,49 +123,75 @@ app.post('/api/convert/hwp-to-pdf', upload.single('file'), async (req: Request, 
   jobs.set(jobId, job);
 
   const inputPath = req.file.path;
-  const hwpxPath = path.join(jobDir, 'output.hwpx');
-  const mdDir = path.join(jobDir, 'md');
-  const mdPath = path.join(mdDir, 'output.md');
+  const originalName = req.file.originalname || '';
+  const isHwpx = originalName.toLowerCase().endsWith('.hwpx');
+  const hwpxPath = isHwpx ? inputPath : path.join(jobDir, 'output.hwpx');
   const htmlPath = path.join(jobDir, 'output.html');
   const pdfPath = path.join(jobDir, 'output.pdf');
 
   // Run conversion async
   (async () => {
     try {
-      // Step 1: HWP → HWPX
-      job.progress = 10;
-      jobs.set(jobId, { ...job });
+      // === Method 1: LibreOffice direct HWP→PDF (best layout preservation) ===
+      if (!isHwpx) {
+        job.progress = 10;
+        jobs.set(jobId, { ...job });
 
-      await execFileAsync(HWPFORGE_PATH, ['convert-hwp5', inputPath, '-o', hwpxPath], {
-        timeout: 60000,
-      });
+        try {
+          console.log(`[METHOD1] Trying LibreOffice direct HWP→PDF jobId=${jobId}`);
+          await execFileAsync(SOFFICE_PATH, [
+            '--headless',
+            '--convert-to', 'pdf',
+            '--outdir', jobDir,
+            inputPath,
+          ], { timeout: 120000, env: { ...process.env, HOME: '/tmp', LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8', OOO_LOCALE: 'ko' } });
 
-      // Step 2: HWPX → Markdown
-      job.progress = 40;
-      jobs.set(jobId, { ...job });
-
-      fs.mkdirSync(mdDir, { recursive: true });
-      await execFileAsync(HWPFORGE_PATH, ['to-md', hwpxPath, '-o', mdDir], {
-        timeout: 60000,
-      });
-
-      // Find the actual markdown file (hwpforge creates it with document name)
-      const mdFiles = fs.readdirSync(mdDir).filter(f => f.endsWith('.md'));
-      const actualMdPath = mdFiles.length > 0 ? path.join(mdDir, mdFiles[0]) : mdPath;
-
-      if (!fs.existsSync(actualMdPath)) {
-        throw new Error('Markdown 변환 결과를 찾을 수 없습니다.');
+          // Check if PDF was created (LibreOffice uses original filename)
+          const possiblePdfs = fs.readdirSync(jobDir).filter(f => f.endsWith('.pdf'));
+          if (possiblePdfs.length > 0) {
+            const generatedPdf = path.join(jobDir, possiblePdfs[0]);
+            if (generatedPdf !== pdfPath) {
+              fs.renameSync(generatedPdf, pdfPath);
+            }
+            // Cleanup input
+            try { fs.unlinkSync(inputPath); } catch { /* skip */ }
+            job.status = 'completed';
+            job.progress = 100;
+            job.resultUrl = `/api/download/${jobId}`;
+            jobs.set(jobId, job);
+            console.log(`[METHOD1 OK] LibreOffice direct HWP→PDF jobId=${jobId} file=${originalName}`);
+            return; // Success!
+          }
+          console.log(`[METHOD1 FAIL] No PDF generated, falling back`);
+        } catch (e) {
+          console.log(`[METHOD1 FAIL] ${e instanceof Error ? e.message : 'unknown'}, falling back`);
+        }
       }
 
-      // Step 3: Markdown → HTML
-      job.progress = 60;
+      // === Method 2 (fallback): HWP→HWPX→HTML→PDF ===
+      // Step 1: HWP5 → HWPX (skip if already HWPX)
+      job.progress = 20;
       jobs.set(jobId, { ...job });
 
-      await execFileAsync('python3', [MD2HTML_PATH, actualMdPath, htmlPath], {
+      if (!isHwpx) {
+        await execFileAsync(HWPFORGE_PATH, ['convert-hwp5', inputPath, '-o', hwpxPath], {
+          timeout: 60000,
+        });
+      }
+
+      // Step 2: HWPX → HTML (direct, preserves tables/formatting)
+      job.progress = 50;
+      jobs.set(jobId, { ...job });
+
+      await execFileAsync('python3', [HWPX2HTML_PATH, hwpxPath, htmlPath], {
         timeout: 30000,
       });
 
-      // Step 4: HTML → PDF (via LibreOffice)
+      if (!fs.existsSync(htmlPath)) {
+        throw new Error('HTML 변환 결과를 찾을 수 없습니다.');
+      }
+
+      // Step 3: HTML → PDF (via LibreOffice)
       job.progress = 80;
       jobs.set(jobId, { ...job });
 
@@ -143,7 +200,7 @@ app.post('/api/convert/hwp-to-pdf', upload.single('file'), async (req: Request, 
         '--convert-to', 'pdf',
         '--outdir', jobDir,
         htmlPath,
-      ], { timeout: 60000 });
+      ], { timeout: 60000, env: { ...process.env, HOME: '/tmp', LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8', OOO_LOCALE: 'ko' } });
 
       // Verify PDF created
       if (!fs.existsSync(pdfPath)) {
@@ -163,6 +220,7 @@ app.post('/api/convert/hwp-to-pdf', upload.single('file'), async (req: Request, 
       job.progress = 100;
       job.resultUrl = `/api/download/${jobId}`;
       jobs.set(jobId, job);
+      console.log(`[CONVERT OK] jobId=${jobId} file=${originalName}`);
 
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : '변환 중 오류가 발생했습니다.';
@@ -200,11 +258,13 @@ app.get('/api/download/:jobId', (req: Request, res: Response) => {
   if (!job || job.status !== 'completed') {
     return res.status(404).json({ error: '다운로드할 파일이 없습니다.' });
   }
-  const pdfPath = path.join(OUTPUT_DIR, job.id, 'output.pdf');
-  if (!fs.existsSync(pdfPath)) {
-    return res.status(404).json({ error: 'PDF 파일을 찾을 수 없습니다.' });
+  // Use job.outputPath directly (supports encrypted.pdf, decrypted.pdf, output.pdf, .odt etc.)
+  const filePath = (job as any).outputPath || path.join(OUTPUT_DIR, job.id, 'output.pdf');
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: '파일을 찾을 수 없습니다.' });
   }
-  res.download(pdfPath, 'converted.pdf');
+  const downloadName = (job as any).resultFilename || 'converted.pdf';
+  res.download(filePath, downloadName);
 });
 
 // ============================================================
@@ -340,6 +400,142 @@ app.post('/api/payments/confirm', async (req: Request, res: Response) => {
 });
 
 // ============================================================
+// PDF 암호 설정 (qpdf)
+// ============================================================
+app.post('/api/encrypt', upload.single('file'), async (req: Request, res: Response) => {
+  if (!req.file) { res.status(400).json({ error: '파일이 없습니다.' }); return; }
+  const { password } = req.body;
+  if (!password) { res.status(400).json({ error: '비밀번호가 필요합니다.' }); return; }
+
+  const jobId = nanoid();
+  const jobDir = path.join(OUTPUT_DIR, jobId);
+  try {
+    fs.mkdirSync(jobDir, { recursive: true });
+    const inputPath = req.file.path;
+    const outputPath = path.join(jobDir, 'encrypted.pdf');
+
+    await execFileAsync('qpdf', [
+      '--encrypt', password, password, '256',
+      '--',
+      inputPath, outputPath
+    ], { timeout: 30000 });
+
+    if (!fs.existsSync(outputPath)) {
+      throw new Error('qpdf 출력 파일이 생성되지 않았습니다.');
+    }
+
+    jobs.set(jobId, {
+      id: jobId,
+      status: 'completed',
+      progress: 100,
+      createdAt: Date.now(),
+      outputPath,
+      originalName: req.file.originalname,
+      resultFilename: req.file.originalname.replace('.pdf', '_encrypted.pdf'),
+      deleteAt: Date.now() + 10 * 60 * 1000,
+    });
+    res.json({ jobId, status: 'completed', progress: 100 });
+  } catch (err: any) {
+    res.status(500).json({ error: '암호 설정 실패: ' + (err.message || err) });
+  }
+});
+
+// ============================================================
+// PDF 암호 해제 (qpdf)
+// ============================================================
+app.post('/api/decrypt', upload.single('file'), async (req: Request, res: Response) => {
+  if (!req.file) { res.status(400).json({ error: '파일이 없습니다.' }); return; }
+  const { password } = req.body;
+  if (!password) { res.status(400).json({ error: '비밀번호가 필요합니다.' }); return; }
+
+  const jobId = nanoid();
+  const jobDir = path.join(OUTPUT_DIR, jobId);
+  try {
+    fs.mkdirSync(jobDir, { recursive: true });
+    const inputPath = req.file.path;
+    const outputPath = path.join(jobDir, 'decrypted.pdf');
+
+    await execFileAsync('qpdf', [
+      '--password=' + password,
+      '--decrypt',
+      inputPath, outputPath
+    ], { timeout: 30000 });
+
+    if (!fs.existsSync(outputPath)) {
+      throw new Error('qpdf 출력 파일이 생성되지 않았습니다.');
+    }
+
+    jobs.set(jobId, {
+      id: jobId,
+      status: 'completed',
+      progress: 100,
+      createdAt: Date.now(),
+      outputPath,
+      originalName: req.file.originalname,
+      resultFilename: req.file.originalname.replace('.pdf', '_decrypted.pdf'),
+      deleteAt: Date.now() + 10 * 60 * 1000,
+    });
+    res.json({ jobId, status: 'completed', progress: 100 });
+  } catch (err: any) {
+    if (err.message?.includes('invalid password') || err.stderr?.includes('invalid password')) {
+      res.status(401).json({ error: '비밀번호가 틀렸습니다.' });
+    } else {
+      res.status(500).json({ error: '암호 해제 실패: ' + (err.message || err) });
+    }
+  }
+});
+
+// ============================================================
+// PDF → 한글(HWP/ODT) 변환 (LibreOffice)
+// ============================================================
+app.post('/api/convert/pdf-to-odt', upload.single('file'), async (req: Request, res: Response) => {
+  if (!req.file) { res.status(400).json({ error: '파일이 없습니다.' }); return; }
+
+  const jobId = nanoid();
+  const jobDir = path.join(OUTPUT_DIR, jobId);
+  try {
+    fs.mkdirSync(jobDir, { recursive: true });
+    const inputPath = req.file.path;
+    const baseName = path.basename(inputPath, path.extname(inputPath));
+    const expectedOdt = path.join(jobDir, baseName + '.odt');
+
+    console.log(`[PDF→ODT] input=${inputPath} baseName=${baseName} expectedOdt=${expectedOdt}`);
+
+    await execFileAsync(SOFFICE_PATH, [
+      '--headless',
+      '--infilter=writer_pdf_import',
+      '--convert-to', 'odt',
+      '--outdir', jobDir,
+      inputPath,
+    ], { timeout: 60000, env: { ...process.env, HOME: '/tmp', LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8' } });
+
+    // LibreOffice may name output differently; find any .odt in jobDir
+    const files = fs.readdirSync(jobDir);
+    console.log(`[PDF→ODT] output dir contents: ${files.join(', ')}`);
+    const odtFile = files.find(f => f.endsWith('.odt'));
+    if (!odtFile) {
+      throw new Error(`ODT 변환 실패: dir=${jobDir} files=[${files.join(',')}]`);
+    }
+    const odtPath = path.join(jobDir, odtFile);
+
+    jobs.set(jobId, {
+      id: jobId,
+      status: 'completed',
+      progress: 100,
+      createdAt: Date.now(),
+      outputPath: odtPath,
+      originalName: req.file.originalname,
+      resultFilename: req.file.originalname.replace('.pdf', '.odt'),
+      deleteAt: Date.now() + 10 * 60 * 1000,
+    });
+    res.json({ jobId, status: 'completed', progress: 100 });
+  } catch (err: any) {
+    console.error(`[PDF→ODT] ERROR: ${err.message}`);
+    res.status(500).json({ error: 'ODT 변환 실패: ' + (err.message || err) });
+  }
+});
+
+// ============================================================
 // Health Check
 // ============================================================
 app.get('/api/health', (_req: Request, res: Response) => {
@@ -347,7 +543,7 @@ app.get('/api/health', (_req: Request, res: Response) => {
     status: 'ok',
     hwpforge: fs.existsSync(HWPFORGE_PATH),
     soffice: true,
-    md2html: fs.existsSync(MD2HTML_PATH),
+    hwpx2html: fs.existsSync(HWPX2HTML_PATH),
   });
 });
 
@@ -355,7 +551,7 @@ app.listen(PORT, () => {
   console.log(`PDF Master API server running on port ${PORT}`);
   console.log(`  HWPForge: ${HWPFORGE_PATH} (${fs.existsSync(HWPFORGE_PATH) ? 'OK' : 'MISSING'})`);
   console.log(`  LibreOffice: ${SOFFICE_PATH}`);
-  console.log(`  md2html: ${MD2HTML_PATH} (${fs.existsSync(MD2HTML_PATH) ? 'OK' : 'MISSING'})`);
+  console.log(`  hwpx2html: ${HWPX2HTML_PATH} (${fs.existsSync(HWPX2HTML_PATH) ? 'OK' : 'MISSING'})`);
 });
 
 export default app;

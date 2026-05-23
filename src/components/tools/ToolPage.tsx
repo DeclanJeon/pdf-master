@@ -2,6 +2,7 @@ import { useParams, Link } from 'react-router-dom'
 import { getToolById } from '@/lib/tools'
 import { MaskingTool } from '@/components/tools/MaskingTool'
 import { StampTool } from '@/components/tools/StampTool'
+import { SignTool } from '@/components/tools/SignTool'
 import { GenericPdfTool } from '@/components/tools/GenericPdfTool'
 import HwpToPdfTool from '@/components/tools/HwpToPdfTool'
 import { ArrowLeft } from 'lucide-react'
@@ -27,6 +28,8 @@ export function ToolPage() {
         return <MaskingTool />
       case 'pdf-stamp':
         return <StampTool />
+      case 'pdf-sign':
+        return <SignTool />
       case 'hwp-to-pdf':
         return <HwpToPdfTool />
       default:

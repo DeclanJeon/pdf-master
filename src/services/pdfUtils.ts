@@ -544,14 +544,27 @@ export const encryptPdf = async (
   file: File,
   password: string
 ): Promise<Uint8Array> => {
-  const arrayBuffer = await file.arrayBuffer();
-  const doc = await PDFDocument.load(arrayBuffer);
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('password', password);
 
-  // TODO: pdf-lib API 변경으로 인한 임시 처리 (암호화 기능 구현 필요)
-  // 추후 라이브러리 문서 확인 후 수정 필요
-  // 현재는 암호화 없이 저장만 가능
-  console.warn("PDF 암호화 기능은 현재 개발 중입니다. 암호화 없이 저장됩니다.");
-  return doc.save();
+  const response = await fetch('/api/encrypt', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: '암호 설정 실패' }));
+    throw new Error(err.error || '암호 설정 실패');
+  }
+
+  const { jobId } = await response.json();
+
+  // Download the result
+  const downloadRes = await fetch(`/api/download/${jobId}`);
+  if (!downloadRes.ok) throw new Error('암호화된 PDF 다운로드 실패');
+  const arrayBuffer = await downloadRes.arrayBuffer();
+  return new Uint8Array(arrayBuffer);
 };
 
 // 이미지 워터마크 기능
@@ -674,17 +687,27 @@ export const unlockPdf = async (
   file: File,
   password: string
 ): Promise<Uint8Array> => {
-  void password;
-  const arrayBuffer = await file.arrayBuffer();
-  try {
-    const doc = await PDFDocument.load(arrayBuffer, { ignoreEncryption: true });
-    if (!doc.isEncrypted) {
-      throw new Error("잠금된 PDF 파일이 아닙니다.");
-    }
-    return doc.save();
-  } catch (e) {
-    throw new Error("비밀번호가 일치하지 않거나 파일이 손상되었습니다.");
+  const formData = new FormData();
+  formData.append('file', file);
+  formData.append('password', password);
+
+  const response = await fetch('/api/decrypt', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ error: '암호 해제 실패' }));
+    throw new Error(err.error || '암호 해제 실패');
   }
+
+  const { jobId } = await response.json();
+
+  // Download the result
+  const downloadRes = await fetch(`/api/download/${jobId}`);
+  if (!downloadRes.ok) throw new Error('해제된 PDF 다운로드 실패');
+  const arrayBuffer = await downloadRes.arrayBuffer();
+  return new Uint8Array(arrayBuffer);
 };
 
 // 6. 이미지(서명)를 PDF 특정 좌표에 합성

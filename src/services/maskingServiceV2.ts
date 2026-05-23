@@ -14,7 +14,7 @@ interface TextItem {
   fontName: string
 }
 
-interface DetectedInfo {
+export interface DetectedInfo {
   type: 'rrn' | 'phone' | 'email' | 'account' | 'card'
   text: string
   maskedText: string
@@ -23,6 +23,7 @@ interface DetectedInfo {
   y: number
   width: number
   height: number
+  verified?: boolean // 체크섬 검증 통과 여부 (RRN, card)
 }
 
 // 패턴 정의
@@ -34,18 +35,27 @@ const PATTERNS = {
   card: /\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}/g,
 }
 
+// 감지 우선순위 (높을수록 우선): 같은 텍스트 영역이 겹치면 우선순위 높은 것만 유지
+const TYPE_PRIORITY: Record<string, number> = {
+  rrn: 5,
+  phone: 4,
+  card: 3,
+  account: 2,
+  email: 1,
+}
+
 /**
  * pdfjs-dist를 사용해 PDF에서 텍스트 위치 정보를 추출합니다.
  */
 export async function extractTextPositions(pdfBytes: Uint8Array): Promise<Map<number, TextItem[]>> {
   const pdfjsLib = await import('pdfjs-dist')
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`
   const pdf = await pdfjsLib.getDocument({ data: pdfBytes }).promise
   const textMap = new Map<number, TextItem[]>()
 
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i)
     const textContent = await page.getTextContent()
-    const viewport = page.getViewport({ scale: 1 })
 
     const items: TextItem[] = []
     for (const item of textContent.items) {
@@ -69,29 +79,30 @@ export async function extractTextPositions(pdfBytes: Uint8Array): Promise<Map<nu
 
 /**
  * 텍스트 위치 정보에서 개인정보를 감지합니다.
+ * BUG-1: 주민번호는 패턴 매칭 + 체크섬 검증 결과를 verified 필드로 구분
+ * BUG-2: 중복 감지 제거 (우선순위 적용)
  */
 export function detectInfoFromPositions(textMap: Map<number, TextItem[]>): DetectedInfo[] {
   const detected: DetectedInfo[] = []
 
   for (const [pageIndex, items] of textMap) {
-    // 전체 텍스트 결합
     const fullText = items.map(item => item.str).join(' ')
 
-    // 주민등록번호 감지
+    // 주민등록번호 감지 (BUG-1: 체크섬 안 통과해도 패턴만 맞으면 감지, verified=false)
     let match: RegExpExecArray | null
     const rrnRegex = new RegExp(PATTERNS.rrn.source, 'g')
     while ((match = rrnRegex.exec(fullText)) !== null) {
-      if (isValidRRN(match[0])) {
-        const pos = findTextPosition(items, match.index, match[0])
-        if (pos) {
-          detected.push({
-            type: 'rrn',
-            text: match[0],
-            maskedText: maskRRN(match[0]),
-            pageIndex,
-            ...pos,
-          })
-        }
+      const valid = isValidRRN(match[0])
+      const pos = findTextPosition(items, match.index, match[0])
+      if (pos) {
+        detected.push({
+          type: 'rrn',
+          text: match[0],
+          maskedText: maskRRN(match[0]),
+          pageIndex,
+          verified: valid,
+          ...pos,
+        })
       }
     }
 
@@ -124,9 +135,94 @@ export function detectInfoFromPositions(textMap: Map<number, TextItem[]>): Detec
         })
       }
     }
+
+    // 계좌번호 감지 (10자리 이상)
+    const accountRegex = new RegExp(PATTERNS.account.source, 'g')
+    while ((match = accountRegex.exec(fullText)) !== null) {
+      const digits = match[0].replace(/-/g, '')
+      if (digits.length >= 10) {
+        const pos = findTextPosition(items, match.index, match[0])
+        if (pos) {
+          detected.push({
+            type: 'account',
+            text: match[0],
+            maskedText: maskAccount(match[0]),
+            pageIndex,
+            ...pos,
+          })
+        }
+      }
+    }
+
+    // 신용카드 감지 (Luhn 검증)
+    const cardRegex = new RegExp(PATTERNS.card.source, 'g')
+    while ((match = cardRegex.exec(fullText)) !== null) {
+      const digits = match[0].replace(/[-\s]/g, '')
+      if (digits.length === 16 && luhnCheck(digits)) {
+        const pos = findTextPosition(items, match.index, match[0])
+        if (pos) {
+          detected.push({
+            type: 'card',
+            text: match[0],
+            maskedText: maskCard(match[0]),
+            pageIndex,
+            verified: true,
+            ...pos,
+          })
+        }
+      }
+    }
   }
 
-  return detected
+  // BUG-2: 중복 감지 제거 (같은 위치에 여러 타입이 감지되면 우선순위 적용)
+  return deduplicateDetections(detected)
+}
+
+/**
+ * 중복 감지 제거: 텍스트 영역이 겹치면 우선순위가 높은 것만 유지
+ */
+function deduplicateDetections(items: DetectedInfo[]): DetectedInfo[] {
+  const result: DetectedInfo[] = []
+
+  // 페이지별로 그룹핑
+  const byPage = new Map<number, DetectedInfo[]>()
+  for (const item of items) {
+    if (!byPage.has(item.pageIndex)) byPage.set(item.pageIndex, [])
+    byPage.get(item.pageIndex)!.push(item)
+  }
+
+  for (const [, pageItems] of byPage) {
+    // 이미 확정된 영역
+    const claimed: Array<{ x1: number; y1: number; x2: number; y2: number; type: string }> = []
+
+    // 우선순위 높은 순으로 정렬
+    const sorted = [...pageItems].sort(
+      (a, b) => (TYPE_PRIORITY[b.type] || 0) - (TYPE_PRIORITY[a.type] || 0)
+    )
+
+    for (const item of sorted) {
+      const ix1 = item.x
+      const iy1 = item.y
+      const ix2 = item.x + item.width
+      const iy2 = item.y + item.height
+
+      // 기존 확정 영역과 겹치는지 확인
+      const overlaps = claimed.some(c => {
+        const overlapX = Math.max(0, Math.min(ix2, c.x2) - Math.max(ix1, c.x1))
+        const overlapY = Math.max(0, Math.min(iy2, c.y2) - Math.max(iy1, c.y1))
+        const overlapArea = overlapX * overlapY
+        const itemArea = item.width * item.height
+        return overlapArea / itemArea > 0.5 // 50% 이상 겹치면 중복
+      })
+
+      if (!overlaps) {
+        result.push(item)
+        claimed.push({ x1: ix1, y1: iy1, x2: ix2, y2: iy2, type: item.type })
+      }
+    }
+  }
+
+  return result
 }
 
 /**
@@ -149,7 +245,6 @@ function findTextPosition(
     const itemEnd = charIndex + item.str.length
 
     if (matchIndex >= itemStart && matchIndex < itemEnd) {
-      // 시작 위치 발견
       const offsetInItem = matchIndex - itemStart
       const tx = item.transform
       startX = tx[4] + (offsetInItem > 0 ? offsetInItem * (item.width / item.str.length) : 0)
@@ -173,17 +268,17 @@ function findTextPosition(
 }
 
 /**
- * 감지된 개인정보에 검은 박스를 그려 마스킹합니다.
+ * 감지된 개인정보에 마스킹을 적용합니다.
  */
 export async function applyMasking(
   pdfBytes: Uint8Array,
   detected: DetectedInfo[],
   options: {
-    fillColor?: [number, number, number] // RGB 0-1
-    style?: 'box' | 'blur' | 'replace'
+    fillColor?: [number, number, number]
+    style?: 'box' | 'replace'
   } = {}
 ): Promise<{ pdfBytes: Uint8Array; maskedCount: number }> {
-  const { style = 'box' } = options
+  const { style = 'replace' } = options
   const pdfDoc = await PDFDocument.load(pdfBytes)
   const pages = pdfDoc.getPages()
 
@@ -201,7 +296,6 @@ export async function applyMasking(
     const h = item.height + 4 // 여유분
 
     if (style === 'box') {
-      // 검은 박스로 덮기
       page.drawRectangle({
         x: x - 2,
         y: y - 2,
@@ -210,7 +304,6 @@ export async function applyMasking(
         color: rgb(0, 0, 0),
       })
     } else if (style === 'replace') {
-      // 텍스트를 마스킹된 버전으로 교체
       page.drawRectangle({
         x: x - 2,
         y: y - 2,
@@ -258,6 +351,19 @@ function maskEmail(email: string): string {
   return `${masked}@${domain}`
 }
 
+function maskAccount(account: string): string {
+  const parts = account.split('-')
+  if (parts.length > 1) {
+    return parts.map((p, i) => i === parts.length - 1 ? '****' : p).join('-')
+  }
+  return account.slice(0, -4) + '****'
+}
+
+function maskCard(card: string): string {
+  const parts = card.split(/[-\s]/)
+  return parts.map((p, i) => i === 1 || i === 2 ? '****' : p).join('-')
+}
+
 function isValidRRN(rrn: string): boolean {
   const cleaned = rrn.replace('-', '')
   if (cleaned.length !== 13) return false
@@ -266,6 +372,121 @@ function isValidRRN(rrn: string): boolean {
   const sum = digits.slice(0, 12).reduce((acc, d, i) => acc + d * weights[i], 0)
   const checkDigit = (11 - (sum % 11)) % 10
   return checkDigit === digits[12]
+}
+
+function luhnCheck(num: string): boolean {
+  let sum = 0
+  let alternate = false
+  for (let i = num.length - 1; i >= 0; i--) {
+    let n = parseInt(num[i], 10)
+    if (alternate) {
+      n *= 2
+      if (n > 9) n -= 9
+    }
+    sum += n
+    alternate = !alternate
+  }
+  return sum % 10 === 0
+}
+
+/**
+ * PDF 파일에서 텍스트를 추출합니다 (preview용)
+ */
+export async function extractTextFromPdf(pdfBytes: Uint8Array): Promise<string> {
+  const pdfjsLib = await import('pdfjs-dist')
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`
+  const pdf = await pdfjsLib.getDocument({ data: pdfBytes }).promise
+  let fullText = ''
+
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i)
+    const textContent = await page.getTextContent()
+    const pageText = textContent.items
+      .map((item: any) => item.str)
+      .join(' ')
+    fullText += pageText + '\n'
+  }
+
+  return fullText
+}
+
+/**
+ * 텍스트에서 감지 (preview용) — 체크섬 안 되어도 감지
+ */
+export function previewMasking(text: string): Omit<DetectedInfo, 'pageIndex' | 'x' | 'y' | 'width' | 'height'>[] {
+  const result: Omit<DetectedInfo, 'pageIndex' | 'x' | 'y' | 'width' | 'height'>[] = []
+  let match: RegExpExecArray | null
+
+  const rrnRegex = new RegExp(PATTERNS.rrn.source, 'g')
+  while ((match = rrnRegex.exec(text)) !== null) {
+    result.push({ type: 'rrn', text: match[0], maskedText: maskRRN(match[0]), verified: isValidRRN(match[0]) })
+  }
+
+  const phoneRegex = new RegExp(PATTERNS.phone.source, 'g')
+  while ((match = phoneRegex.exec(text)) !== null) {
+    result.push({ type: 'phone', text: match[0], maskedText: maskPhone(match[0]) })
+  }
+
+  const emailRegex = new RegExp(PATTERNS.email.source, 'g')
+  while ((match = emailRegex.exec(text)) !== null) {
+    result.push({ type: 'email', text: match[0], maskedText: maskEmail(match[0]) })
+  }
+
+  const accountRegex = new RegExp(PATTERNS.account.source, 'g')
+  while ((match = accountRegex.exec(text)) !== null) {
+    const digits = match[0].replace(/-/g, '')
+    if (digits.length >= 10) {
+      result.push({ type: 'account', text: match[0], maskedText: maskAccount(match[0]) })
+    }
+  }
+
+  const cardRegex = new RegExp(PATTERNS.card.source, 'g')
+  while ((match = cardRegex.exec(text)) !== null) {
+    const digits = match[0].replace(/[-\s]/g, '')
+    if (digits.length === 16 && luhnCheck(digits)) {
+      result.push({ type: 'card', text: match[0], maskedText: maskCard(match[0]), verified: true })
+    }
+  }
+
+  // preview도 중복 제거 (텍스트 기준)
+  return deduplicatePreview(result)
+}
+
+function deduplicatePreview(items: Omit<DetectedInfo, 'pageIndex' | 'x' | 'y' | 'width' | 'height'>[]): Omit<DetectedInfo, 'pageIndex' | 'x' | 'y' | 'width' | 'height'>[] {
+  const result: typeof items = []
+  const claimed = new Set<string>()
+
+  // 우선순위 높은 순
+  const sorted = [...items].sort((a, b) => (TYPE_PRIORITY[b.type] || 0) - (TYPE_PRIORITY[a.type] || 0))
+
+  for (const item of sorted) {
+    const key = item.text
+    if (!claimed.has(key)) {
+      result.push(item)
+      claimed.add(key)
+    }
+  }
+
+  return result
+}
+
+// 타입별 라벨/컬러 (공통 사용)
+export type PersonalInfoType = 'rrn' | 'phone' | 'email' | 'account' | 'card'
+
+export const typeLabels: Record<PersonalInfoType, string> = {
+  rrn: '주민등록번호',
+  phone: '전화번호',
+  email: '이메일',
+  account: '계좌번호',
+  card: '신용카드',
+}
+
+export const typeColors: Record<PersonalInfoType, string> = {
+  rrn: 'bg-red-500',
+  phone: 'bg-orange-500',
+  email: 'bg-yellow-500',
+  account: 'bg-blue-500',
+  card: 'bg-purple-500',
 }
 
 /**

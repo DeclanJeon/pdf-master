@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Stamp, Upload, Download, CheckCircle, Loader2, Plus } from 'lucide-react'
+import { Stamp, Upload, Download, CheckCircle, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -191,25 +191,28 @@ export function StampTool() {
           <div>
             {/* 템플릿 선택 */}
             <div className="grid grid-cols-2 gap-3 mb-4">
-              {stampTemplates.map(t => (
-                <button
-                  key={t.id}
-                  onClick={() => setSelectedTemplate(t)}
-                  className={`flex flex-col items-center rounded-lg border-2 p-4 transition-colors ${
-                    selectedTemplate.id === t.id
-                      ? 'border-red-400 bg-red-50'
-                      : 'border-gray-200 hover:border-gray-300'
-                  }`}
-                >
-                  <div
-                    className="w-16 h-16 rounded-full border-4 flex items-center justify-center text-lg font-serif"
-                    style={{ borderColor: t.color, color: t.color }}
+              {stampTemplates.map(t => {
+                const previewSvg = generateStampSVG(t, stampText)
+                const previewUrl = svgToBlobUrl(previewSvg)
+                return (
+                  <button
+                    key={t.id}
+                    onClick={() => setSelectedTemplate(t)}
+                    className={`flex flex-col items-center rounded-lg border-2 p-4 transition-colors ${
+                      selectedTemplate.id === t.id
+                        ? 'border-red-400 bg-red-50'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
                   >
-                    {stampText.slice(0, 2)}
-                  </div>
-                  <span className="mt-2 text-xs font-medium">{t.name}</span>
-                </button>
-              ))}
+                    <img
+                      src={previewUrl}
+                      alt={t.name}
+                      className="w-16 h-16 object-contain"
+                    />
+                    <span className="mt-2 text-xs font-medium">{t.name}</span>
+                  </button>
+                )
+              })}
             </div>
 
             {/* 도장 텍스트 입력 */}
@@ -323,19 +326,16 @@ export function StampTool() {
         {/* 미리보기 */}
         <div className="rounded-lg border-2 border-dashed border-gray-200 p-8 flex items-center justify-center min-h-[200px]">
           <div className="text-center">
-            <div
-              className="mx-auto mb-2 border-4 rounded-full flex items-center justify-center font-serif"
+            <img
+              src={getStampImageUrl()}
+              alt="도장 미리보기"
+              className="mx-auto mb-2 object-contain"
               style={{
                 width: 56.7 * stampScale,
                 height: 56.7 * stampScale,
-                borderColor: selectedTemplate.color,
-                color: selectedTemplate.color,
                 opacity: stampOpacity,
-                fontSize: `${14 * stampScale}px`,
               }}
-            >
-              {stampText.slice(0, 2)}
-            </div>
+            />
             <p className="text-xs text-muted-foreground">미리보기</p>
           </div>
         </div>

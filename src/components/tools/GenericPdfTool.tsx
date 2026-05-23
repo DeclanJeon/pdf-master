@@ -2,10 +2,8 @@ import { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { Upload, Download, CheckCircle, Loader2, FileText } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
 
-// DocuFlow의 pdfUtils를 사용하는 일반 PDF 도구
 import {
   mergePdfs,
   splitPdf,
@@ -13,6 +11,8 @@ import {
   addWatermark,
   addPageNumbers,
   compressPdf,
+  encryptPdf,
+  unlockPdf,
 } from '@/services/pdfUtils'
 
 type Step = 'upload' | 'processing' | 'done'
@@ -88,6 +88,43 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
           result = await compressPdf(pdfBytes)
           setResultName(acceptedFiles[0].name.replace('.pdf', '_compressed.pdf'))
           break
+        }
+        case 'pdf-encrypt': {
+          const password = prompt('PDF 비밀번호를 입력하세요:')
+          if (!password) { setStep('upload'); return }
+          result = await encryptPdf(acceptedFiles[0], password)
+          setResultName(acceptedFiles[0].name.replace('.pdf', '_encrypted.pdf'))
+          break
+        }
+        case 'pdf-unlock': {
+          const password = prompt('PDF 비밀번호를 입력하세요:')
+          if (!password) { setStep('upload'); return }
+          result = await unlockPdf(acceptedFiles[0], password)
+          setResultName(acceptedFiles[0].name.replace('.pdf', '_unlocked.pdf'))
+          break
+        }
+        case 'pdf-to-hwp': {
+          // PDF → ODT 변환 (한글에서 ODT 열기 가능)
+          const formData = new FormData()
+          formData.append('file', acceptedFiles[0])
+          const res = await fetch('/api/convert/pdf-to-odt', { method: 'POST', body: formData })
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: '변환 실패' }))
+            throw new Error(err.error || 'ODT 변환 실패')
+          }
+          const { jobId } = await res.json()
+          const dlRes = await fetch(`/api/download/${jobId}`)
+          if (!dlRes.ok) throw new Error('ODT 다운로드 실패')
+          const odtBlob = await dlRes.blob()
+          result = odtBlob
+          setResultName(acceptedFiles[0].name.replace('.pdf', '.odt'))
+          break
+        }
+        case 'pdf-sign': {
+          // 서명은 별도 SignCanvas 컴포넌트에서 처리 (signStep으로 분기)
+          toast.info('서명 기능은 아래 서명 패드에서 진행해주세요.')
+          setStep('upload')
+          return
         }
         default:
           // HWP 등 아직 구현되지 않은 도구

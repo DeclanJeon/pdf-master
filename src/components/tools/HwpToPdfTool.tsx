@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useAppStore } from '@/store/appStore';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+const API_BASE = import.meta.env.VITE_API_URL || '';
 
 type Step = 'upload' | 'converting' | 'done' | 'error';
 
@@ -43,9 +43,11 @@ export default function HwpToPdfTool() {
   }, []);
 
   const startPolling = (jid: string) => {
+    let failCount = 0;
     pollingRef.current = setInterval(async () => {
       try {
         const res = await fetch(`${API_BASE}/api/convert/status/${jid}`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
 
         setProgress(data.progress || 0);
@@ -60,20 +62,24 @@ export default function HwpToPdfTool() {
           setStep('error');
           if (pollingRef.current) clearInterval(pollingRef.current);
         }
-      } catch {
-        setErrorMsg('서버 연결 오류');
-        setStep('error');
-        if (pollingRef.current) clearInterval(pollingRef.current);
+      } catch (err: any) {
+        failCount++;
+        if (failCount >= 5) {
+          setErrorMsg('서버 연결 오류가 반복됩니다. 잠시 후 다시 시도해주세요.');
+          setStep('error');
+          if (pollingRef.current) clearInterval(pollingRef.current);
+        }
+        // Otherwise silently retry on next interval
       }
-    }, 2000);
+    }, 3000);
   };
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const file = acceptedFiles[0];
     if (!file) return;
 
-    if (!file.name.toLowerCase().endsWith('.hwp')) {
-      setErrorMsg('HWP 파일만 변환 가능합니다.');
+    if (!file.name.toLowerCase().endsWith('.hwp') && !file.name.toLowerCase().endsWith('.hwpx')) {
+      setErrorMsg('HWP/HWPX 파일만 변환 가능합니다.');
       setStep('error');
       return;
     }
@@ -108,7 +114,7 @@ export default function HwpToPdfTool() {
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: { 'application/x-hwp': ['.hwp'] },
+    accept: { 'application/x-hwp': ['.hwp', '.hwpx'] },
     maxFiles: 1,
     disabled: step === 'converting',
   });
