@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { Stamp, Upload, Download, CheckCircle, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -7,9 +7,12 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
-import { insertStamp, getDefaultStampSize, getDefaultStampPosition, stampTemplates, generateStampSVG, svgToBlobUrl } from '@/services/stampService'
+import { insertStamp, getDefaultStampSize, stampTemplates, generateStampSVG, svgToBlobUrl } from '@/services/stampService'
 import { PDFDocument } from 'pdf-lib'
+import * as pdfjsLib from 'pdfjs-dist'
 import { toast } from 'sonner'
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.mjs`
 
 type Step = 'upload' | 'config' | 'processing' | 'done'
 
@@ -20,19 +23,39 @@ export function StampTool() {
   const [resultBytes, setResultBytes] = useState<Uint8Array | null>(null)
   const [pageCount, setPageCount] = useState(0)
   const [pageSize, setPageSize] = useState({ width: 595, height: 842 })
+  const [pageImage, setPageImage] = useState<string>('')  // PDF 페이지 렌더링 이미지
 
   // 도장 설정
   const [stampText, setStampText] = useState('전형동')
   const [stampSource, setStampSource] = useState<'template' | 'upload'>('template')
   const [selectedTemplate, setSelectedTemplate] = useState(stampTemplates[0])
   const [customStampUrl, setCustomStampUrl] = useState<string>('')
-  const [stampPosition, setStampPosition] = useState<'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'center'>('bottom-right')
   const [stampOpacity, setStampOpacity] = useState(0.9)
   const [stampScale, setStampScale] = useState(1)
   const [applyAllPages, setApplyAllPages] = useState(true)
   const [targetPage, setTargetPage] = useState(1)
 
+  // 드래그 상태
+  const [stampPos, setStampPos] = useState<{ x: number; y: number } | null>(null) // 화면 좌표 (preview container 내부)
+  const [isDragging, setIsDragging] = useState(false)
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
+
   const customFileRef = useRef<HTMLInputElement>(null)
+  const previewRef = useRef<HTMLDivElement>(null)
+  const stampImgRef = useRef<HTMLImageElement>(null)
+
+  // PDF 페이지를 이미지로 렌더링
+  const renderPageImage = useCallback(async (bytes: Uint8Array, pageNum: number) => {
+    const pdf = await pdfjsLib.getDocument({ data: bytes.slice() }).promise
+    const page = await pdf.getPage(pageNum)
+    const viewport = page.getViewport({ scale: 1.5 })
+    const canvas = document.createElement('canvas')
+    canvas.width = viewport.width
+    canvas.height = viewport.height
+    const ctx = canvas.getContext('2d')!
+    await page.render({ canvasContext: ctx, viewport }).promise
+    setPageImage(canvas.toDataURL())
+  }, [])
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const f = acceptedFiles[0]
@@ -49,11 +72,13 @@ export function StampTool() {
       const { width, height } = firstPage.getSize()
       setPageCount(pdfDoc.getPageCount())
       setPageSize({ width, height })
+      await renderPageImage(bytes, 1)
+      setStampPos(null) // 리셋
       setStep('config')
     } catch {
       toast.error('PDF 파일을 읽을 수 없습니다.')
     }
-  }, [])
+  }, [renderPageImage])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -75,22 +100,130 @@ export function StampTool() {
     return svgToBlobUrl(svg)
   }
 
+  // 화면 좌표를 PDF 좌표로 변환
+  const screenToPdfCoord = (screenX: number, screenY: number): { x: number; y: number } => {
+    if (!previewRef.current) return { x: 0, y: 0 }
+
+    const container = previewRef.current
+    const rect = container.getBoundingClientRect()
+    // 컨테이너 내부 상대 좌표
+    const relX = screenX - rect.left
+    const relY = screenY - rect.top
+
+    // 컨테이너 크기 대비 PDF 좌표 비율
+    const scaleX = pageSize.width / rect.width
+    const scaleY = pageSize.height / rect.height
+
+    // PDF 좌표 (좌상단 기준)
+    const pdfX = relX * scaleX
+    const pdfY = relY * scaleY
+
+    return { x: pdfX, y: pdfY }
+  }
+
+  // 드래그 시작
+  const handleStampPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDragging(true)
+
+    const stampEl = stampImgRef.current
+    if (!stampEl) return
+
+    const stampRect = stampEl.getBoundingClientRect()
+    setDragOffset({
+      x: e.clientX - stampRect.left,
+      y: e.clientY - stampRect.top,
+    })
+
+    // 캡처
+    stampEl.setPointerCapture(e.pointerId)
+  }
+
+  // 드래그 이동
+  const handleStampPointerMove = (e: React.PointerEvent) => {
+    if (!isDragging || !previewRef.current) return
+
+    const container = previewRef.current
+    const rect = container.getBoundingClientRect()
+
+    // 도장의 새 위치 (컨테이너 내부 기준)
+    let newX = e.clientX - rect.left - dragOffset.x
+    let newY = e.clientY - rect.top - dragOffset.y
+
+    // 컨테이너 범위 내로 제한
+    const stampW = 56.7 * stampScale * (rect.width / pageSize.width)
+    const stampH = 56.7 * stampScale * (rect.height / pageSize.height)
+    newX = Math.max(0, Math.min(newX, rect.width - stampW))
+    newY = Math.max(0, Math.min(newY, rect.height - stampH))
+
+    setStampPos({ x: newX, y: newY })
+  }
+
+  // 드래그 종료
+  const handleStampPointerUp = () => {
+    setIsDragging(false)
+  }
+
+  // 프리뷰 영역 클릭 시 도장 위치 이동
+  const handlePreviewClick = (e: React.MouseEvent) => {
+    if (isDragging) return
+    if (!previewRef.current) return
+
+    const rect = previewRef.current.getBoundingClientRect()
+    const stampW = 56.7 * stampScale * (rect.width / pageSize.width)
+    const stampH = 56.7 * stampScale * (rect.height / pageSize.height)
+
+    setStampPos({
+      x: e.clientX - rect.left - stampW / 2,
+      y: e.clientY - rect.top - stampH / 2,
+    })
+  }
+
+  // 기본 위치 설정 (우측 하단) — ref 크기가 확정된 후 실행
+  useEffect(() => {
+    if (step === 'config' && stampPos === null) {
+      // requestAnimationFrame으로 DOM 레이아웃 완료 후 실행
+      const rafId = requestAnimationFrame(() => {
+        if (!previewRef.current) return
+        const rect = previewRef.current.getBoundingClientRect()
+        if (rect.width === 0 || rect.height === 0) return
+        const stampW = 56.7 * stampScale * (rect.width / pageSize.width)
+        const stampH = 56.7 * stampScale * (rect.height / pageSize.height)
+        setStampPos({
+          x: Math.max(0, rect.width - stampW - 30),
+          y: Math.max(0, rect.height - stampH - 30),
+        })
+      })
+      return () => cancelAnimationFrame(rafId)
+    }
+  }, [step, pageSize, stampScale])
+
   const handleInsertStamp = async () => {
-    if (!pdfBytes) return
+    if (!pdfBytes || stampPos === null) return
     setStep('processing')
 
     try {
       const defaultSize = getDefaultStampSize(pageSize.width)
       const scaledWidth = defaultSize.width * stampScale
       const scaledHeight = defaultSize.height * stampScale
-      const pos = getDefaultStampPosition(pageSize.width, pageSize.height, scaledWidth, scaledHeight, stampPosition)
+
+      // 화면 좌표 → PDF 좌표
+      if (!previewRef.current) {
+        toast.error('미리보기를 찾을 수 없습니다.')
+        setStep('config')
+        return
+      }
+      const rect = previewRef.current.getBoundingClientRect()
+      const pdfX = (stampPos.x / rect.width) * pageSize.width
+      const pdfY = (stampPos.y / rect.height) * pageSize.height
 
       const stampUrl = getStampImageUrl()
 
       const result = await insertStamp(pdfBytes, {
         imageUrl: stampUrl,
-        x: pos.x,
-        y: pos.y,
+        x: pdfX,
+        y: pdfY,
         width: scaledWidth,
         height: scaledHeight,
         opacity: stampOpacity,
@@ -123,6 +256,8 @@ export function StampTool() {
     setFile(null)
     setPdfBytes(null)
     setResultBytes(null)
+    setPageImage('')
+    setStampPos(null)
   }
 
   if (step === 'upload') {
@@ -135,7 +270,7 @@ export function StampTool() {
               <p className="font-medium text-red-900">도장/인감 삽입</p>
               <p className="text-sm text-red-700 mt-1">
                 한국식 원형 도장, 직인, 사인 이미지를 PDF에 삽입합니다.
-                여러 페이지에 일괄 적용할 수 있습니다.
+                PDF 위에서 드래그하여 원하는 위치에 배치할 수 있습니다.
               </p>
             </div>
           </div>
@@ -166,6 +301,67 @@ export function StampTool() {
           <Badge variant="secondary">{pageCount}페이지</Badge>
         </div>
 
+        {/* PDF + 도장 드래그 프리뷰 */}
+        <div>
+          <Label className="text-base font-semibold mb-2 block">
+            도장 위치 지정 — PDF 위에서 드래그하세요
+          </Label>
+          <div
+            ref={previewRef}
+            onClick={handlePreviewClick}
+            className="relative border-2 border-gray-200 rounded-lg overflow-hidden cursor-crosshair select-none"
+            style={{ maxHeight: '70vh' }}
+          >
+            {/* PDF 페이지 배경 */}
+            {pageImage && (
+              <img
+                src={pageImage}
+                alt="PDF 페이지 미리보기"
+                className="w-full h-auto block"
+                draggable={false}
+              />
+            )}
+
+            {/* 드래그 가능한 도장 오버레이 */}
+            {stampPos !== null && (
+              <img
+                ref={stampImgRef}
+                src={getStampImageUrl()}
+                alt="도장"
+                draggable={false}
+                onPointerDown={handleStampPointerDown}
+                onPointerMove={handleStampPointerMove}
+                onPointerUp={handleStampPointerUp}
+                onPointerCancel={handleStampPointerUp}
+                className="absolute touch-none"
+                style={{
+                  left: stampPos.x,
+                  top: stampPos.y,
+                  width: 56.7 * stampScale * (previewRef.current ? previewRef.current.getBoundingClientRect().width / pageSize.width : 1),
+                  height: 56.7 * stampScale * (previewRef.current ? previewRef.current.getBoundingClientRect().height / pageSize.height : 1),
+                  opacity: stampOpacity,
+                  cursor: isDragging ? 'grabbing' : 'grab',
+                  filter: 'drop-shadow(1px 1px 2px rgba(0,0,0,0.2))',
+                  zIndex: 10,
+                  transition: isDragging ? 'none' : 'left 0.05s, top 0.05s',
+                }}
+              />
+            )}
+
+            {/* 드래그 안내 */}
+            {stampPos === null && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/5">
+                <p className="text-sm text-gray-500 bg-white/80 px-3 py-1 rounded">
+                  PDF 위 아무 곳이나 클릭하면 도장이 나타납니다
+                </p>
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            클릭: 도장 이동 | 드래그: 세밀한 위치 조정 | 아래 설정에서 크기/투명도 조절
+          </p>
+        </div>
+
         {/* 도장 소스 선택 */}
         <div>
           <Label className="text-base font-semibold">도장 선택</Label>
@@ -190,7 +386,7 @@ export function StampTool() {
         {stampSource === 'template' ? (
           <div>
             {/* 템플릿 선택 */}
-            <div className="grid grid-cols-2 gap-3 mb-4">
+            <div className="grid grid-cols-4 gap-2 mb-4">
               {stampTemplates.map(t => {
                 const previewSvg = generateStampSVG(t, stampText)
                 const previewUrl = svgToBlobUrl(previewSvg)
@@ -198,7 +394,7 @@ export function StampTool() {
                   <button
                     key={t.id}
                     onClick={() => setSelectedTemplate(t)}
-                    className={`flex flex-col items-center rounded-lg border-2 p-4 transition-colors ${
+                    className={`flex flex-col items-center rounded-lg border-2 p-2 transition-colors ${
                       selectedTemplate.id === t.id
                         ? 'border-red-400 bg-red-50'
                         : 'border-gray-200 hover:border-gray-300'
@@ -207,9 +403,9 @@ export function StampTool() {
                     <img
                       src={previewUrl}
                       alt={t.name}
-                      className="w-16 h-16 object-contain"
+                      className="w-10 h-10 object-contain"
                     />
-                    <span className="mt-2 text-xs font-medium">{t.name}</span>
+                    <span className="mt-1 text-[10px] font-medium leading-tight">{t.name}</span>
                   </button>
                 )
               })}
@@ -251,35 +447,16 @@ export function StampTool() {
           </div>
         )}
 
-        {/* 위치 선택 */}
-        <div>
-          <Label className="text-base font-semibold">도장 위치</Label>
-          <div className="grid grid-cols-5 gap-2 mt-2">
-            {(['top-left', 'top-right', 'center', 'bottom-left', 'bottom-right'] as const).map(pos => (
-              <Button
-                key={pos}
-                variant={stampPosition === pos ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setStampPosition(pos)}
-                className="text-xs"
-              >
-                {pos === 'top-left' && '좌상'}
-                {pos === 'top-right' && '우상'}
-                {pos === 'center' && '중앙'}
-                {pos === 'bottom-left' && '좌하'}
-                {pos === 'bottom-right' && '우하'}
-              </Button>
-            ))}
-          </div>
-        </div>
-
         {/* 크기 & 투명도 */}
         <div className="space-y-4">
           <div>
             <Label>도장 크기: {stampScale}x</Label>
             <Slider
               value={[stampScale]}
-              onValueChange={([v]) => setStampScale(v)}
+              onValueChange={([v]) => {
+                setStampScale(v)
+                setStampPos(null) // 크기 변경 시 위치 리셋
+              }}
               min={0.5}
               max={3}
               step={0.1}
@@ -321,23 +498,6 @@ export function StampTool() {
               />
             </div>
           )}
-        </div>
-
-        {/* 미리보기 */}
-        <div className="rounded-lg border-2 border-dashed border-gray-200 p-8 flex items-center justify-center min-h-[200px]">
-          <div className="text-center">
-            <img
-              src={getStampImageUrl()}
-              alt="도장 미리보기"
-              className="mx-auto mb-2 object-contain"
-              style={{
-                width: 56.7 * stampScale,
-                height: 56.7 * stampScale,
-                opacity: stampOpacity,
-              }}
-            />
-            <p className="text-xs text-muted-foreground">미리보기</p>
-          </div>
         </div>
 
         {/* 실행 */}
