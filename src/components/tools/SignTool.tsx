@@ -1,10 +1,15 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Upload, Download, CheckCircle, Loader2, Pen, Eraser } from 'lucide-react'
+import { Upload, Download, CheckCircle, Loader2, Pen, Eraser, Crosshair } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
 import { embedImagesOnPdf } from '@/services/pdfUtils'
+import { PDFDocument } from 'pdf-lib'
+import * as pdfjsLib from 'pdfjs-dist'
+
+pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.mjs`
 
 type Step = 'upload' | 'sign' | 'processing' | 'done'
 
@@ -12,16 +17,52 @@ export function SignTool() {
   const [step, setStep] = useState<Step>('upload')
   const [file, setFile] = useState<File | null>(null)
   const [resultBlob, setResultBlob] = useState<Blob | null>(null)
+  const [pageCount, setPageCount] = useState(0)
+  const [pageSize, setPageSize] = useState({ width: 595, height: 842 })
+  const [pageImage, setPageImage] = useState<string>('')
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const previewRef = useRef<HTMLDivElement>(null)
   const isDrawingRef = useRef(false)
   const lastPosRef = useRef<{ x: number; y: number } | null>(null)
+
+  // 서명 위치 (화면 좌표, preview 컨테이너 기준)
+  const [signPos, setSignPos] = useState<{ x: number; y: number } | null>(null)
+  const [isDraggingSign, setIsDraggingSign] = useState(false)
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
+
+  // PDF 페이지를 이미지로 렌더링
+  const renderPageImage = useCallback(async (bytes: Uint8Array) => {
+    const pdf = await pdfjsLib.getDocument({ data: bytes.slice() }).promise
+    const page = await pdf.getPage(1)
+    const viewport = page.getViewport({ scale: 1.2 })
+    const canvas = document.createElement('canvas')
+    canvas.width = viewport.width
+    canvas.height = viewport.height
+    const ctx = canvas.getContext('2d')!
+    await page.render({ canvasContext: ctx, viewport }).promise
+    setPageImage(canvas.toDataURL())
+  }, [])
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     const f = acceptedFiles[0]
     if (!f) return
     setFile(f)
-    setStep('sign')
-  }, [])
+    const buffer = await f.arrayBuffer()
+    const bytes = new Uint8Array(buffer)
+
+    try {
+      const pdfDoc = await PDFDocument.load(bytes)
+      const firstPage = pdfDoc.getPages()[0]
+      const { width, height } = firstPage.getSize()
+      setPageCount(pdfDoc.getPageCount())
+      setPageSize({ width, height })
+      await renderPageImage(bytes)
+      setSignPos(null)
+      setStep('sign')
+    } catch {
+      toast.error('PDF 파일을 읽을 수 없습니다.')
+    }
+  }, [renderPageImage])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -30,7 +71,9 @@ export function SignTool() {
     maxSize: 50 * 1024 * 1024,
   })
 
-  // Canvas 드로잉 로직
+  // ============================================================
+  // 서명 캔버스 드로잉 (좌표 보정 적용)
+  // ============================================================
   useEffect(() => {
     if (step !== 'sign') return
     const canvas = canvasRef.current
@@ -42,11 +85,22 @@ export function SignTool() {
     ctx.lineCap = 'round'
     ctx.lineJoin = 'round'
 
+    /**
+     * 마우스 좌표 → 캔버스 내부 좌표 변환
+     * canvas CSS 크기와 내부 해상도(width/height)가 다를 수 있으므로 보정
+     */
     const getPos = (e: MouseEvent | TouchEvent) => {
       const rect = canvas.getBoundingClientRect()
       const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX
       const clientY = 'touches' in e ? e.touches[0].clientY : e.clientY
-      return { x: clientX - rect.left, y: clientY - rect.top }
+
+      // CSS 좌표를 캔버스 내부 좌표계로 변환
+      const scaleX = canvas.width / rect.width
+      const scaleY = canvas.height / rect.height
+      return {
+        x: (clientX - rect.left) * scaleX,
+        y: (clientY - rect.top) * scaleY,
+      }
     }
 
     const startDraw = (e: MouseEvent | TouchEvent) => {
@@ -71,13 +125,10 @@ export function SignTool() {
       lastPosRef.current = null
     }
 
-    // Mouse events
     canvas.addEventListener('mousedown', startDraw)
     canvas.addEventListener('mousemove', draw)
     canvas.addEventListener('mouseup', endDraw)
     canvas.addEventListener('mouseleave', endDraw)
-
-    // Touch events
     canvas.addEventListener('touchstart', startDraw, { passive: false })
     canvas.addEventListener('touchmove', draw, { passive: false })
     canvas.addEventListener('touchend', endDraw)
@@ -100,20 +151,95 @@ export function SignTool() {
     ctx.clearRect(0, 0, canvas.width, canvas.height)
   }
 
-  const handleSign = async () => {
-    if (!file || !canvasRef.current) return
+  // ============================================================
+  // 서명 위치 드래그
+  // ============================================================
+  const handleSignPointerDown = (e: React.PointerEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDraggingSign(true)
 
-    // 서명 이미지를 Canvas에서 추출
+    const el = e.currentTarget as HTMLElement
+    const rect = el.getBoundingClientRect()
+    setDragOffset({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    })
+    el.setPointerCapture(e.pointerId)
+  }
+
+  const handleSignPointerMove = (e: React.PointerEvent) => {
+    if (!isDraggingSign || !previewRef.current) return
+    const container = previewRef.current
+    const rect = container.getBoundingClientRect()
+
+    let newX = e.clientX - rect.left - dragOffset.x
+    let newY = e.clientY - rect.top - dragOffset.y
+
+    // 뱃지 크기 (약 80x40px 영역)
+    const badgeW = 80
+    const badgeH = 40
+    newX = Math.max(0, Math.min(newX, rect.width - badgeW))
+    newY = Math.max(0, Math.min(newY, rect.height - badgeH))
+
+    setSignPos({ x: newX, y: newY })
+  }
+
+  const handleSignPointerUp = () => {
+    setIsDraggingSign(false)
+  }
+
+  const handlePreviewClick = (e: React.MouseEvent) => {
+    if (isDraggingSign) return
+    if (!previewRef.current) return
+    const rect = previewRef.current.getBoundingClientRect()
+    setSignPos({
+      x: e.clientX - rect.left - 40,
+      y: e.clientY - rect.top - 20,
+    })
+  }
+
+  // 기본 서명 위치 (우하단)
+  useEffect(() => {
+    if (step === 'sign' && signPos === null) {
+      const rafId = requestAnimationFrame(() => {
+        if (!previewRef.current) return
+        const rect = previewRef.current.getBoundingClientRect()
+        if (rect.width === 0) return
+        setSignPos({
+          x: rect.width - 80 - 30,
+          y: rect.height - 40 - 30,
+        })
+      })
+      return () => cancelAnimationFrame(rafId)
+    }
+  }, [step])
+
+  // ============================================================
+  // 서명 실행
+  // ============================================================
+  const handleSign = async () => {
+    if (!file || !canvasRef.current || signPos === null) return
+
     const signCanvas = canvasRef.current
     setStep('processing')
     try {
-      // 서명 이미지를 data URL로 변환
       const signDataUrl = signCanvas.toDataURL('image/png')
+
+      // 화면 좌표 → PDF 좌표 변환
+      if (!previewRef.current) {
+        toast.error('미리보기를 찾을 수 없습니다.')
+        setStep('sign')
+        return
+      }
+      const rect = previewRef.current.getBoundingClientRect()
+      const pdfX = (signPos.x / rect.width) * pageSize.width + 40  // 뱃지 중심 보정
+      const pdfY = (signPos.y / rect.height) * pageSize.height + 20
 
       const result = await embedImagesOnPdf(file, [
         {
-          x: 380,  // 좌측에서 380pt (A4 우하단)
-          y: 80,   // 하단에서 80pt (A4 우하단)
+          x: Math.round(pdfX),
+          y: Math.round(pdfY),
           img: signDataUrl,
           pageIndex: 0,
         },
@@ -144,6 +270,8 @@ export function SignTool() {
     setStep('upload')
     setFile(null)
     setResultBlob(null)
+    setPageImage('')
+    setSignPos(null)
   }
 
   if (step === 'upload') {
@@ -155,7 +283,7 @@ export function SignTool() {
             <div>
               <p className="font-medium text-red-900">PDF 전자서명</p>
               <p className="text-sm text-red-700 mt-1">
-                PDF 파일에 손글씨 서명을 삽입합니다. 서명은 첫 페이지 우하단에 위치합니다.
+                PDF에 손글씨 서명을 삽입합니다. PDF 위에서 서명 위치를 직접 지정할 수 있습니다.
               </p>
             </div>
           </div>
@@ -182,22 +310,79 @@ export function SignTool() {
 
   if (step === 'sign') {
     return (
-      <div>
-        <div className="flex items-center gap-2 mb-4">
+      <div className="space-y-6">
+        {/* 파일 정보 */}
+        <div className="flex items-center gap-2">
           <CheckCircle className="h-5 w-5 text-green-600" />
           <span className="font-medium">{file?.name}</span>
-          <Badge variant="secondary">{(file!.size / 1024).toFixed(0)} KB</Badge>
+          <Badge variant="secondary">{pageCount}페이지</Badge>
         </div>
 
-        <div className="mb-4">
-          <h3 className="font-medium mb-2">아래에 서명하세요</h3>
+        {/* PDF 미리보기 + 서명 위치 지정 */}
+        <div>
+          <Label className="text-base font-semibold mb-2 block">
+            서명 위치 지정 — PDF 위에서 드래그하세요
+          </Label>
+          <div
+            ref={previewRef}
+            onClick={handlePreviewClick}
+            className="relative border-2 border-gray-200 rounded-lg overflow-hidden cursor-crosshair select-none"
+            style={{ maxHeight: '55vh' }}
+          >
+            {/* PDF 페이지 배경 */}
+            {pageImage && (
+              <img
+                src={pageImage}
+                alt="PDF 페이지 미리보기"
+                className="w-full h-auto block"
+                draggable={false}
+              />
+            )}
+
+            {/* 드래그 가능한 서명 위치 뱃지 */}
+            {signPos !== null && (
+              <div
+                onPointerDown={handleSignPointerDown}
+                onPointerMove={handleSignPointerMove}
+                onPointerUp={handleSignPointerUp}
+                onPointerCancel={handleSignPointerUp}
+                className="absolute flex items-center gap-1 bg-red-600 text-white text-xs font-bold px-2 py-1 rounded shadow-lg touch-none"
+                style={{
+                  left: signPos.x,
+                  top: signPos.y,
+                  cursor: isDraggingSign ? 'grabbing' : 'grab',
+                  zIndex: 20,
+                  transition: isDraggingSign ? 'none' : 'left 0.05s, top 0.05s',
+                }}
+              >
+                <Crosshair className="h-3 w-3" />
+                서명위치
+              </div>
+            )}
+
+            {signPos === null && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/5">
+                <p className="text-sm text-gray-500 bg-white/80 px-3 py-1 rounded">
+                  PDF 위 아무 곳이나 클릭하여 서명 위치를 지정하세요
+                </p>
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">
+            클릭: 위치 이동 | 드래그: 세밀 조정 | 빨간 뱃지가 서명이 들어갈 위치입니다
+          </p>
+        </div>
+
+        {/* 서명 캔버스 */}
+        <div>
+          <Label className="text-base font-semibold mb-2 block">서명 그리기</Label>
           <div className="border-2 border-gray-300 rounded-lg overflow-hidden bg-white">
             <canvas
               ref={canvasRef}
-              width={500}
-              height={200}
+              width={600}
+              height={180}
               className="w-full touch-none cursor-crosshair"
-              style={{ maxHeight: '200px' }}
+              style={{ maxHeight: '180px', backgroundColor: '#fafafa' }}
             />
           </div>
           <div className="flex gap-2 mt-2">
@@ -207,6 +392,7 @@ export function SignTool() {
           </div>
         </div>
 
+        {/* 실행 */}
         <div className="flex gap-3">
           <Button variant="outline" onClick={handleReset}>
             다시 선택
