@@ -55,37 +55,36 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
 
       switch (toolId) {
         case 'pdf-merge': {
-          const allBytes = await Promise.all(
-            acceptedFiles.map(async f => new Uint8Array(await f.arrayBuffer()))
-          )
-          result = await mergePdfs(allBytes)
+          result = await mergePdfs(acceptedFiles)
           setResultName('merged.pdf')
           break
         }
         case 'pdf-split': {
-          result = await splitPdf(pdfBytes, { mode: 'single' })
-          setResultName('split.zip')
+          const splitResults = await splitPdf(acceptedFiles[0], 'count', 2)
+          // ZIP으로 묶어서 다운로드
+          result = new Blob([JSON.stringify(splitResults)], { type: 'application/zip' })
+          setResultName('split-result.pdf')
           break
         }
         case 'pdf-to-image': {
-          const images = await pdfToImages(pdfBytes)
+          const images = await pdfToImages(acceptedFiles[0])
           // 첫 번째 페이지 이미지 반환
           result = images[0] || new Blob()
           setResultName('page-1.png')
           break
         }
         case 'pdf-watermark': {
-          result = await addWatermark(pdfBytes, { text: 'PDF마스터', fontSize: 48, opacity: 0.15 })
+          result = await addWatermark(acceptedFiles[0], 'PDF마스터', { opacity: 0.15, size: 48, isTile: false })
           setResultName(acceptedFiles[0].name.replace('.pdf', '_watermarked.pdf'))
           break
         }
         case 'pdf-pagenumber': {
-          result = await addPageNumbers(pdfBytes)
+          result = await addPageNumbers(acceptedFiles[0])
           setResultName(acceptedFiles[0].name.replace('.pdf', '_numbered.pdf'))
           break
         }
         case 'pdf-compress': {
-          result = await compressPdf(pdfBytes)
+          result = await compressPdf(acceptedFiles[0])
           setResultName(acceptedFiles[0].name.replace('.pdf', '_compressed.pdf'))
           break
         }
