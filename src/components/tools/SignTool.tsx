@@ -29,6 +29,7 @@ export function SignTool() {
   const [signPos, setSignPos] = useState<{ x: number; y: number } | null>(null)
   const [isDraggingSign, setIsDraggingSign] = useState(false)
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
+  const [signPreviewUrl, setSignPreviewUrl] = useState<string>('')  // 서명 미리보기 이미지
 
   // PDF 페이지를 이미지로 렌더링
   const renderPageImage = useCallback(async (bytes: Uint8Array) => {
@@ -123,6 +124,10 @@ export function SignTool() {
     const endDraw = () => {
       isDrawingRef.current = false
       lastPosRef.current = null
+      // 서명 이미지 갱신 → PDF 미리보기에 반영
+      try {
+        setSignPreviewUrl(canvas.toDataURL('image/png'))
+      } catch { /* ignore */ }
     }
 
     canvas.addEventListener('mousedown', startDraw)
@@ -327,7 +332,6 @@ export function SignTool() {
             ref={previewRef}
             onClick={handlePreviewClick}
             className="relative border-2 border-gray-200 rounded-lg overflow-hidden cursor-crosshair select-none"
-            style={{ maxHeight: '55vh' }}
           >
             {/* PDF 페이지 배경 */}
             {pageImage && (
@@ -339,25 +343,49 @@ export function SignTool() {
               />
             )}
 
-            {/* 드래그 가능한 서명 위치 뱃지 */}
+            {/* 드래그 가능한 서명 이미지 (또는 뱃지) */}
             {signPos !== null && (
-              <div
-                onPointerDown={handleSignPointerDown}
-                onPointerMove={handleSignPointerMove}
-                onPointerUp={handleSignPointerUp}
-                onPointerCancel={handleSignPointerUp}
-                className="absolute flex items-center gap-1 bg-red-600 text-white text-xs font-bold px-2 py-1 rounded shadow-lg touch-none"
-                style={{
-                  left: signPos.x,
-                  top: signPos.y,
-                  cursor: isDraggingSign ? 'grabbing' : 'grab',
-                  zIndex: 20,
-                  transition: isDraggingSign ? 'none' : 'left 0.05s, top 0.05s',
-                }}
-              >
-                <Crosshair className="h-3 w-3" />
-                서명위치
-              </div>
+              signPreviewUrl ? (
+                <img
+                  src={signPreviewUrl}
+                  alt="서명 미리보기"
+                  onPointerDown={handleSignPointerDown}
+                  onPointerMove={handleSignPointerMove}
+                  onPointerUp={handleSignPointerUp}
+                  onPointerCancel={handleSignPointerUp}
+                  draggable={false}
+                  className="absolute touch-none"
+                  style={{
+                    left: signPos.x,
+                    top: signPos.y,
+                    width: 120,
+                    height: 36,
+                    cursor: isDraggingSign ? 'grabbing' : 'grab',
+                    zIndex: 20,
+                    filter: 'drop-shadow(1px 1px 3px rgba(0,0,0,0.3))',
+                    transition: isDraggingSign ? 'none' : 'left 0.05s, top 0.05s',
+                    objectFit: 'contain',
+                  }}
+                />
+              ) : (
+                <div
+                  onPointerDown={handleSignPointerDown}
+                  onPointerMove={handleSignPointerMove}
+                  onPointerUp={handleSignPointerUp}
+                  onPointerCancel={handleSignPointerUp}
+                  className="absolute flex items-center gap-1 bg-red-600 text-white text-xs font-bold px-2 py-1 rounded shadow-lg touch-none"
+                  style={{
+                    left: signPos.x,
+                    top: signPos.y,
+                    cursor: isDraggingSign ? 'grabbing' : 'grab',
+                    zIndex: 20,
+                    transition: isDraggingSign ? 'none' : 'left 0.05s, top 0.05s',
+                  }}
+                >
+                  <Crosshair className="h-3 w-3" />
+                  서명위치
+                </div>
+              )
             )}
 
             {signPos === null && (
@@ -369,7 +397,7 @@ export function SignTool() {
             )}
           </div>
           <p className="text-xs text-muted-foreground mt-1">
-            클릭: 위치 이동 | 드래그: 세밀 조정 | 빨간 뱃지가 서명이 들어갈 위치입니다
+            클릭: 위치 이동 | 드래그: 세밀 조정 | 아래에 서명을 그리면 미리보기에 실시간 반영됩니다
           </p>
         </div>
 
