@@ -1,7 +1,11 @@
 import { useState, useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Upload, Download, CheckCircle, Loader2, FileText } from 'lucide-react'
+import { Upload, Download, CheckCircle, Loader2, FileText, Droplets, Grid3X3 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Slider } from '@/components/ui/slider'
+import { Switch } from '@/components/ui/switch'
 import { toast } from 'sonner'
 
 import {
@@ -15,7 +19,7 @@ import {
   unlockPdf,
 } from '@/services/pdfUtils'
 
-type Step = 'upload' | 'processing' | 'done'
+type Step = 'upload' | 'config' | 'processing' | 'done'
 
 interface ToolConfig {
   acceptMultiple: boolean
@@ -42,11 +46,28 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
   const [resultBlob, setResultBlob] = useState<Blob | null>(null)
   const [resultName, setResultName] = useState('')
 
+  // 워터마크 설정
+  const [watermarkText, setWatermarkText] = useState('')
+  const [watermarkOpacity, setWatermarkOpacity] = useState(0.15)
+  const [watermarkSize, setWatermarkSize] = useState(48)
+  const [isTile, setIsTile] = useState(false)
+
   const config = toolConfigs[toolId] || { acceptMultiple: false }
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return
     setFiles(acceptedFiles)
+
+    // 워터마크는 config 단계로, 나머지는 바로 처리
+    if (toolId === 'pdf-watermark') {
+      setWatermarkText('')  // 초기화
+      setStep('config')
+      return
+    }
+    processFiles(acceptedFiles)
+  }, [toolId])
+
+  const processFiles = async (acceptedFiles: File[], watermarkOpts?: { text: string; opacity: number; size: number; isTile: boolean }) => {
     setStep('processing')
 
     try {
@@ -61,20 +82,23 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
         }
         case 'pdf-split': {
           const splitResults = await splitPdf(acceptedFiles[0], 'count', 2)
-          // ZIP으로 묶어서 다운로드
           result = new Blob([JSON.stringify(splitResults)], { type: 'application/zip' })
           setResultName('split-result.pdf')
           break
         }
         case 'pdf-to-image': {
           const images = await pdfToImages(acceptedFiles[0])
-          // 첫 번째 페이지 이미지 반환
           result = images[0] || new Blob()
           setResultName('page-1.png')
           break
         }
         case 'pdf-watermark': {
-          result = await addWatermark(acceptedFiles[0], 'PDF마스터', { opacity: 0.15, size: 48, isTile: false })
+          const opts = watermarkOpts || { text: 'PDF마스터', opacity: 0.15, size: 48, isTile: false }
+          result = await addWatermark(acceptedFiles[0], opts.text, {
+            opacity: opts.opacity,
+            size: opts.size,
+            isTile: opts.isTile,
+          })
           setResultName(acceptedFiles[0].name.replace('.pdf', '_watermarked.pdf'))
           break
         }
@@ -103,7 +127,6 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
           break
         }
         case 'pdf-to-hwp': {
-          // PDF → ODT 변환 (한글에서 ODT 열기 가능)
           const formData = new FormData()
           formData.append('file', acceptedFiles[0])
           const res = await fetch('/api/convert/pdf-to-odt', { method: 'POST', body: formData })
@@ -114,19 +137,16 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
           const { jobId } = await res.json()
           const dlRes = await fetch(`/api/download/${jobId}`)
           if (!dlRes.ok) throw new Error('ODT 다운로드 실패')
-          const odtBlob = await dlRes.blob()
-          result = odtBlob
+          result = await dlRes.blob()
           setResultName(acceptedFiles[0].name.replace('.pdf', '.odt'))
           break
         }
         case 'pdf-sign': {
-          // 서명은 별도 SignCanvas 컴포넌트에서 처리 (signStep으로 분기)
-          toast.info('서명 기능은 아래 서명 패드에서 진행해주세요.')
+          toast.info('서명 기능은 전자서명 페이지에서 진행해주세요.')
           setStep('upload')
           return
         }
         default:
-          // HWP 등 아직 구현되지 않은 도구
           toast.info('이 도구는 곧 추가될 예정입니다.')
           setStep('upload')
           return
@@ -141,7 +161,20 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
       toast.error('처리 중 오류가 발생했습니다.')
       setStep('upload')
     }
-  }, [toolId])
+  }
+
+  const handleStartWatermark = () => {
+    if (!watermarkText.trim()) {
+      toast.error('워터마크 텍스트를 입력해주세요.')
+      return
+    }
+    processFiles(files, {
+      text: watermarkText.trim(),
+      opacity: watermarkOpacity,
+      size: watermarkSize,
+      isTile,
+    })
+  }
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -167,6 +200,77 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
     setFiles([])
     setResultBlob(null)
     setResultName('')
+    setWatermarkText('')
+  }
+
+  // ============================================================
+  // 워터마크 설정 UI
+  // ============================================================
+  if (step === 'config' && toolId === 'pdf-watermark') {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-2">
+          <CheckCircle className="h-5 w-5 text-green-600" />
+          <span className="font-medium">{files[0]?.name}</span>
+        </div>
+
+        <div>
+          <Label htmlFor="wm-text" className="text-base font-semibold">워터마크 텍스트</Label>
+          <Input
+            id="wm-text"
+            value={watermarkText}
+            onChange={(e) => setWatermarkText(e.target.value)}
+            placeholder="예: 기밀, DRAFT, 회사명 ..."
+            className="mt-2"
+            autoFocus
+          />
+        </div>
+
+        <div>
+          <Label>투명도: {Math.round(watermarkOpacity * 100)}%</Label>
+          <Slider
+            value={[watermarkOpacity]}
+            onValueChange={(v) => setWatermarkOpacity(Array.isArray(v) ? v[0] : v)}
+            min={0.05}
+            max={0.5}
+            step={0.01}
+            className="mt-2"
+          />
+        </div>
+
+        <div>
+          <Label>글자 크기: {watermarkSize}pt</Label>
+          <Slider
+            value={[watermarkSize]}
+            onValueChange={(v) => setWatermarkSize(Array.isArray(v) ? v[0] : v)}
+            min={12}
+            max={120}
+            step={1}
+            className="mt-2"
+          />
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between">
+            <div>
+              <Label>바둑판 패턴</Label>
+              <p className="text-xs text-muted-foreground">
+                {isTile ? '페이지 전체에 반복 배치' : '페이지 중앙에 한 번만'}
+              </p>
+            </div>
+            <Switch checked={isTile} onCheckedChange={setIsTile} />
+          </div>
+        </div>
+
+        <div className="flex gap-3">
+          <Button variant="outline" onClick={handleReset}>다시 선택</Button>
+          <Button onClick={handleStartWatermark} className="bg-red-600 hover:bg-red-700 flex-1">
+            <Droplets className="mr-2 h-4 w-4" />
+            워터마크 추가
+          </Button>
+        </div>
+      </div>
+    )
   }
 
   if (step === 'upload' || step === 'processing') {
