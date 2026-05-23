@@ -1,0 +1,19 @@
+services:
+  web:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - NODE_ENV=production
+      - TOSS_SECRET_KEY=${TOSS_SECRET_KEY}
+      - TOSS_CLIENT_KEY=${TOSS_CLIENT_KEY}
+      - HWPFORGE_PATH=/app/bin/hwpforge
+      - SOFFICE_PATH=soffice
+      - MD2HTML_PATH=/app/scripts/md2html.py
+    volumes:
+      - hwpforge-bin:/app/bin
+    restart: unless-stopped
+
+volumes:
+  hwpforge-bin:
