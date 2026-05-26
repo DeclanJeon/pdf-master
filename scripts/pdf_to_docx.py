@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""PDF → DOCX 변환 v11: PyMuPDF + python-docx
+"""PDF → DOCX 변환 v12: PyMuPDF + python-docx
 
-핵심 전략: 모든 이미지를 anchor(절대 위치)로 배치
-- 표 위 이미지: anchor behindDoc=0 (전경)
-- 표 내부 이미지: anchor behindDoc=1 (배경, 표 뒤에)
-- 표 아래 이미지: anchor behindDoc=0 (전경)
-- 모든 anchor를 하나의 빈 문단에 넣어 LibreOffice 호환성 확보
-- 표: space_before로 원본 Y 위치에 배치
+핵심:
+1. 모든 이미지 anchor behindDoc=1 → 텍스트가 항상 위(편집 가능)
+2. 각 텍스트 라인별 폰트/사이즈 정확 보존
+3. 표: Y/X 경계로 행높이/열너비, clip으로 셀 내용 추출
 """
 import argparse, io, os, sys, logging
 
@@ -31,6 +29,7 @@ log = logging.getLogger(__name__)
 PT_TO_MM = 25.4 / 72
 MM_TO_PT = 72 / 25.4
 DEFAULT_MARGIN_MM = 10
+ANCHOR_PARA_HEIGHT = 4  # anchor용 빈 문단이 차지하는 대략적 높이(pt)
 
 
 def _normalize_font(raw_font: str) -> str:
@@ -48,6 +47,57 @@ def _normalize_font(raw_font: str) -> str:
     return raw_font
 
 
+def _extract_cell_lines(page, clip_rect):
+    """셀 영역의 텍스트를 라인별로 추출 (폰트/사이즈 포함)."""
+    lines = []
+    try:
+        for b in page.get_text("dict", clip=clip_rect)["blocks"]:
+            if b["type"] != 0: continue
+            for line in b["lines"]:
+                line_spans = []
+                for span in line["spans"]:
+                    text = span["text"]
+                    if not text.strip() and not text: continue
+                    line_spans.append({
+                        "text": text,
+                        "font": _normalize_font(span["font"]),
+                        "size": span["size"],
+                        "bold": "bold" in span["font"].lower(),
+                    })
+                if line_spans:
+                    # 같은 라인의 스팬들을 하나의 라인으로 합치기
+                    combined = {"text": "", "font": None, "size": None, "bold": False}
+                    # 가장 긴 텍스트의 폰트/사이즈 기준
+                    dominant = max(line_spans, key=lambda s: len(s["text"]))
+                    combined["font"] = dominant["font"]
+                    combined["size"] = dominant["size"]
+                    combined["bold"] = dominant["bold"]
+                    combined["text"] = "".join(s["text"] for s in line_spans).strip()
+                    if combined["text"]:
+                        lines.append(combined)
+    except Exception:
+        pass
+    return lines
+
+
+def _detect_align(page, clip_rect, is_merged=False):
+    """셀 텍스트 정렬 감지."""
+    if is_merged: return "center"
+    try:
+        for b in page.get_text("dict", clip=clip_rect)["blocks"]:
+            if b["type"] != 0: continue
+            for line in b["lines"]:
+                for span in line["spans"]:
+                    if span["text"].strip():
+                        cw = clip_rect.x1 - clip_rect.x0
+                        if cw > 0:
+                            rel = (span["origin"][0] - clip_rect.x0) / cw
+                            if 0.3 < rel < 0.7: return "center"
+                            if rel > 0.8: return "right"
+    except: pass
+    return "left"
+
+
 def analyze_page(page, mode: str) -> dict:
     pw, ph = page.rect.width, page.rect.height
 
@@ -63,37 +113,33 @@ def analyze_page(page, mode: str) -> dict:
         row_heights = [y_vals[i+1]-y_vals[i] for i in range(len(y_vals)-1)]
         col_widths = [x_vals[i+1]-x_vals[i] for i in range(len(x_vals)-1)]
 
+        # 각 셀의 라인별 내용 추출
         cell_details = []
+        merged_rows = set()
         for ri in range(tab.row_count):
+            is_merged = ri < len(data) and tab.col_count >= 2 and data[ri][1] is None
+            if is_merged: merged_rows.add(ri)
             row_details = []
             for ci in range(tab.col_count):
                 y0 = y_vals[ri]; y1 = y_vals[ri+1] if ri+1 < len(y_vals) else y0+30
-                x0 = x_vals[ci]; x1 = x_vals[ci+1] if ci+1 < len(x_vals) else x0+200
+                # 병합 행은 전체 폭으로 clip
+                if is_merged:
+                    x0 = x_vals[0]; x1 = x_vals[-1]
+                else:
+                    x0 = x_vals[ci]; x1 = x_vals[ci+1] if ci+1 < len(x_vals) else x0+200
                 clip = fitz.Rect(x0, y0, x1, y1)
-                raw_text = page.get_text("text", clip=clip).strip()
-                fi = {"size": 11, "font": "Malgun Gothic", "bold": False, "align": "left"}
-                try:
-                    for b in page.get_text("dict", clip=clip)["blocks"]:
-                        if b["type"] != 0: continue
-                        for line in b["lines"]:
-                            for span in line["spans"]:
-                                if span["text"].strip():
-                                    fi["size"] = span["size"]
-                                    fi["font"] = _normalize_font(span["font"])
-                                    if "bold" in span["font"].lower(): fi["bold"] = True
-                                    cw = x1 - x0
-                                    if cw > 0 and 0.2 < (span["origin"][0] - x0) / cw < 0.8:
-                                        fi["align"] = "center"
-                    if ri < len(data) and tab.col_count >= 2 and data[ri][1] is None:
-                        fi["align"] = "center"
-                except: pass
-                row_details.append({"text": raw_text if raw_text else (data[ri][ci] or "" if ri < len(data) and ci < len(data[ri]) else ""), "font": fi})
+                
+                lines = _extract_cell_lines(page, clip)
+                align = _detect_align(page, clip, is_merged)
+                
+                # fallback: extract() 데이터
+                if not lines:
+                    raw_text = (data[ri][ci] or "") if ri < len(data) and ci < len(data[ri]) else ""
+                    if raw_text:
+                        lines = [{"text": raw_text, "font": "Gungsuh", "size": 15, "bold": False}]
+                
+                row_details.append({"lines": lines, "align": align})
             cell_details.append(row_details)
-
-        merged_rows = set()
-        for ri in range(tab.row_count):
-            if ri < len(data) and tab.col_count >= 2 and data[ri][1] is None:
-                merged_rows.add(ri)
 
         table_elements.append({
             "data": data, "rows": tab.row_count, "cols": tab.col_count,
@@ -121,7 +167,7 @@ def analyze_page(page, mode: str) -> dict:
                     "size": span["size"], "font": font, "align": align,
                     "bold": "bold" in span["font"].lower()})
 
-    # 모든 이미지 + 표와의 관계 분류
+    # 모든 이미지 — 텍스트 위에 오면 안 되므로 전부 behindDoc 대상
     image_elements = []
     for info in page.get_image_info(xrefs=True):
         xref = info.get("xref")
@@ -133,27 +179,23 @@ def analyze_page(page, mode: str) -> dict:
             img_data = page.parent.extract_image(xref)
             if not img_data or not img_data.get("image"): continue
         except: continue
-        # 표 영역과 겹치는지
-        in_table = any(fitz.Rect(t["bbox"]).intersects(ir) for t in table_elements)
         image_elements.append({"xref": xref, "bbox": info["bbox"], "w_pt": w_pt, "h_pt": h_pt,
-            "data": img_data["image"], "ext": img_data.get("ext","png"), "in_table": in_table})
+            "data": img_data["image"], "ext": img_data.get("ext","png")})
 
     return {"width": pw, "height": ph,
         "tables": table_elements, "texts": text_elements, "images": image_elements}
 
 
-def _add_anchored_image(doc: Document, img_el: dict, margin_pt: float, doc_pr_counter: list):
-    """inline 이미지를 추가한 후 anchor로 변환. behindDoc은 표 영역 여부에 따라."""
-    behind = "1" if img_el.get("in_table") else "0"
-    x_pt = img_el["bbox"][0] - margin_pt  # page 기준 → margin 오프셋
-    y_pt = img_el["bbox"][1] - margin_pt
+def _add_anchored_image_to_para(doc, para, img_el, doc_pr_counter):
+    """문단에 inline 이미지를 추가한 후 anchor(behindDoc=1)로 변환.
+    모든 이미지는 텍스트 뒤(배경)에 위치해야 함."""
+    x_emu = int(img_el["bbox"][0] * 12700)
+    y_emu = int(img_el["bbox"][1] * 12700)
     w_emu = int(img_el["w_pt"] * 12700)
     h_emu = int(img_el["h_pt"] * 12700)
-    x_emu = int(x_pt * 12700)
-    y_emu = int(y_pt * 12700)
     counter = doc_pr_counter[0]; doc_pr_counter[0] += 1
 
-    run = doc.add_paragraph().add_run()  # 임시 문단
+    run = para.add_run()
     run.add_picture(io.BytesIO(img_el["data"]),
                     width=Mm(img_el["w_pt"] * PT_TO_MM),
                     height=Mm(img_el["h_pt"] * PT_TO_MM))
@@ -163,15 +205,15 @@ def _add_anchored_image(doc: Document, img_el: dict, margin_pt: float, doc_pr_co
     if inline is None:
         return
 
-    # r:embed와 cNvGraphicFramePr 추출
     graphic = inline.find(qn('a:graphic'))
     graphicData = graphic.find(qn('a:graphicData'))
     pic = graphicData.find(qn('pic:pic'))
     rId = pic.find(qn('pic:blipFill')).find(qn('a:blip')).get(qn('r:embed'))
-    
+
+    # 모든 이미지 behindDoc=1 → 텍스트가 항상 위(편집 가능)
     anchor_xml = (
         f'<wp:anchor distT="0" distB="0" distL="0" distR="0" '
-        f'simplePos="0" relativeHeight="{counter}" behindDoc="{behind}" '
+        f'simplePos="0" relativeHeight="{counter}" behindDoc="1" '
         f'locked="0" layoutInCell="1" allowOverlap="1" '
         f'{nsdecls("wp","r","a","pic")}>'
         f'<wp:simplePos x="0" y="0"/>'
@@ -208,8 +250,7 @@ def build_docx(page_data: dict, mode: str) -> bytes:
 
     table_top = page_data["tables"][0]["bbox"][1] if page_data["tables"] else ph_pt
 
-    # ── 1. 빈 문단 하나에 모든 anchor 이미지 삽입 ──
-    # anchor 이미지는 공간을 차지하지 않으므로 문단 높이만 최소화
+    # ── 1. 빈 문단에 모든 anchor 이미지 삽입 (behindDoc=1) ──
     anchor_para = doc.add_paragraph()
     anchor_para.paragraph_format.space_before = Pt(0)
     anchor_para.paragraph_format.space_after = Pt(0)
@@ -217,12 +258,9 @@ def build_docx(page_data: dict, mode: str) -> bytes:
 
     doc_pr_counter = [1]
     for img_el in page_data["images"]:
-        # inline 이미지를 임시 문단에 추가 후 anchor 변환
-        _add_anchored_image_to_para(doc, anchor_para, img_el, margin_pt, doc_pr_counter)
+        _add_anchored_image_to_para(doc, anchor_para, img_el, doc_pr_counter)
 
-    # ── 2. 표 위 텍스트 배치 (커서 추적) ──
-    # anchor_para가 약 4pt 차지하므로 커서 보정
-    ANCHOR_PARA_HEIGHT = 4
+    # ── 2. 표 위 텍스트 ──
     pre_texts = [t for t in page_data["texts"] if t["y"] < table_top]
     pre_texts.sort(key=lambda t: t["y"])
 
@@ -240,7 +278,7 @@ def build_docx(page_data: dict, mode: str) -> bytes:
         p.paragraph_format.line_spacing = Pt(tel["size"] * 1.15)
         cursor_y = txt_y + tel["size"]
 
-    # ── 3. 표 배치 ──
+    # ── 3. 표 ──
     for tinfo in page_data["tables"]:
         tab_y = tinfo["bbox"][1]
         gap = max(0, tab_y - cursor_y)
@@ -252,7 +290,7 @@ def build_docx(page_data: dict, mode: str) -> bytes:
         _add_table(doc, tinfo)
         cursor_y = tinfo["bbox"][3]
 
-    # ── 4. 표 아래 텍스트 배치 ──
+    # ── 4. 표 아래 텍스트 ──
     post_texts = [t for t in page_data["texts"] if t["y"] >= table_top]
     post_texts.sort(key=lambda t: t["y"])
 
@@ -273,60 +311,8 @@ def build_docx(page_data: dict, mode: str) -> bytes:
     return buf.getvalue()
 
 
-def _add_anchored_image_to_para(doc, para, img_el, margin_pt, doc_pr_counter):
-    """문단에 inline 이미지를 추가한 후 anchor로 변환."""
-    behind = "1" if img_el.get("in_table") else "0"
-    # relativeFrom=page → 페이지 원점 기준 (margin 오프셋 불필요)
-    x_emu = int(img_el["bbox"][0] * 12700)
-    y_emu = int(img_el["bbox"][1] * 12700)
-    w_emu = int(img_el["w_pt"] * 12700)
-    h_emu = int(img_el["h_pt"] * 12700)
-    counter = doc_pr_counter[0]; doc_pr_counter[0] += 1
-
-    run = para.add_run()
-    run.add_picture(io.BytesIO(img_el["data"]),
-                    width=Mm(img_el["w_pt"] * PT_TO_MM),
-                    height=Mm(img_el["h_pt"] * PT_TO_MM))
-
-    drawing = run._element.findall(qn('w:drawing'))[0]
-    inline = drawing.find(qn('wp:inline'))
-    if inline is None:
-        return
-
-    # r:embed 추출
-    graphic = inline.find(qn('a:graphic'))
-    graphicData = graphic.find(qn('a:graphicData'))
-    pic = graphicData.find(qn('pic:pic'))
-    rId = pic.find(qn('pic:blipFill')).find(qn('a:blip')).get(qn('r:embed'))
-
-    anchor_xml = (
-        f'<wp:anchor distT="0" distB="0" distL="0" distR="0" '
-        f'simplePos="0" relativeHeight="{counter}" behindDoc="{behind}" '
-        f'locked="0" layoutInCell="1" allowOverlap="1" '
-        f'{nsdecls("wp","r","a","pic")}>'
-        f'<wp:simplePos x="0" y="0"/>'
-        f'<wp:positionH relativeFrom="page"><wp:posOffset>{x_emu}</wp:posOffset></wp:positionH>'
-        f'<wp:positionV relativeFrom="page"><wp:posOffset>{y_emu}</wp:posOffset></wp:positionV>'
-        f'<wp:extent cx="{w_emu}" cy="{h_emu}"/>'
-        f'<wp:effectExtent l="0" t="0" r="0" b="0"/>'
-        f'<wp:wrapNone/>'
-        f'<wp:docPr id="{counter}" name="Picture {counter}"/>'
-        f'<wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>'
-        f'<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">'
-        f'<pic:pic><pic:nvPicPr><pic:cNvPr id="{counter}" name="Picture {counter}"/>'
-        f'<pic:cNvPicPr/><pic:nvGraphicFramePr><pic:graphicFrameLocks noChangeAspect="1"/></pic:nvGraphicFramePr></pic:nvPicPr>'
-        f'<pic:blipFill><a:blip r:embed="{rId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>'
-        f'<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{w_emu}" cy="{h_emu}"/></a:xfrm>'
-        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic>'
-        f'</a:graphicData></a:graphic></wp:anchor>'
-    )
-    anchor_el = parse_xml(anchor_xml)
-    drawing.replace(inline, anchor_el)
-
-
 def _add_table(doc: Document, tinfo: dict):
     rows = tinfo["rows"]; cols = tinfo["cols"]
-    data = tinfo["data"]
     row_heights = tinfo["row_heights"]; col_widths = tinfo["col_widths"]
     cell_details = tinfo["cell_details"]; merged_rows = tinfo["merged_rows"]
 
@@ -337,7 +323,7 @@ def _add_table(doc: Document, tinfo: dict):
     for ri in range(rows):
         if ri < len(row_heights) and row_heights[ri] > 0:
             table.rows[ri].height = Pt(row_heights[ri])
-            table.rows[ri].height_rule = 1
+            table.rows[ri].height_rule = 1  # EXACTLY
 
     total_w = sum(col_widths)
     if total_w > 0:
@@ -352,21 +338,34 @@ def _add_table(doc: Document, tinfo: dict):
         for ci in range(cols):
             if ri in merged_rows and ci > 0: continue
             detail = cell_details[ri][ci] if ri < len(cell_details) and ci < len(cell_details[ri]) else None
-            cell_text = detail["text"] if detail else ""
-            fi = detail["font"] if detail else {}
             doc_cell = table.cell(ri, ci)
+            # 기존 텍스트 제거
             for pp in doc_cell.paragraphs:
                 for rr in pp.runs: rr.text = ""
             doc_cell.paragraphs[0].clear()
-            p = doc_cell.paragraphs[0]
-            for li, line in enumerate(str(cell_text).split("\n")):
-                if li > 0: p = doc_cell.add_paragraph()
-                run = p.add_run(line)
-                _apply_font(run, fi)
-                if ri in merged_rows or ri == 0:
+
+            if not detail or not detail.get("lines"):
+                continue
+
+            lines = detail["lines"]
+            align = detail.get("align", "left")
+
+            for li, line_info in enumerate(lines):
+                if li > 0:
+                    p = doc_cell.add_paragraph()
+                else:
+                    p = doc_cell.paragraphs[0]
+                run = p.add_run(line_info["text"])
+                _apply_font(run, line_info)
+                if align == "center":
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                elif fi.get("align") == "center":
-                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                elif align == "right":
+                    p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+                # 라인 간격: 폰트 사이즈 기반
+                sz = line_info.get("size", 11)
+                p.paragraph_format.space_after = Pt(0)
+                p.paragraph_format.line_spacing = Pt(sz * 1.2)
+
             _set_cell_margins(doc_cell, top=10, bottom=10, start=30, end=30)
 
 
