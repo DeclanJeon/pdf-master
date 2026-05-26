@@ -2,7 +2,7 @@
 """PDF → DOCX 변환: PyMuPDF 정밀 구조감지 + python-docx 정밀 생성
 
 원본 PDF의 레이아웃을 최대한 보존:
-- 표: PyMuPDF find_tables() → 정확한 행/열/병합 구조 + 셀 폰트/정렬
+- 표: PyMuPDF find_tables() → Y/X 경계로 행렬 구조 + extract()로 내용
 - 텍스트: 표 바깥 텍스트 → 절대 위치 앵커 텍스트박스
 - 이미지: 절대 위치 앵커 이미지 (원본 위치/크기 그대로)
 - 폰트: 한국어 폰트 정규화 (서브셋 접두사 제거)
@@ -53,7 +53,6 @@ def _normalize_font(raw_font: str) -> str:
     if "malgun" in lower or "맑은" in lower: return "Malgun Gothic"
     if "arial" in lower: return "Arial"
     if "times" in lower: return "Times New Roman"
-    # 서브셋 접두사 제거 (ABCDEF+Gulim → Gulim)
     if "+" in raw_font:
         base = raw_font.split("+", 1)[1]
         return _normalize_font(base)
@@ -64,7 +63,6 @@ def _normalize_font(raw_font: str) -> str:
 def analyze_page(page, mode: str) -> dict:
     """PyMuPDF 페이지에서 모든 요소를 추출."""
     pw, ph = page.rect.width, page.rect.height
-    margin_pt = DEFAULT_MARGIN_MM * MM_TO_PT
 
     # ── 표 ──
     tables_raw = page.find_tables()
@@ -73,27 +71,44 @@ def analyze_page(page, mode: str) -> dict:
 
     for tab in tables_raw.tables:
         data = tab.extract()
-        cells = tab.cells
         bbox = tab.bbox
         table_rects.append(fitz.Rect(bbox))
 
-        # 셀 폰트/정렬 추출
+        # Y 경계로 행 높이 계산 (cells 인덱싱에 의존하지 않음)
+        y_values = set()
+        for c in tab.cells:
+            y_values.add(round(c[1], 1))
+            y_values.add(round(c[3], 1))
+        y_sorted = sorted(y_values)
+        row_heights = [y_sorted[i+1] - y_sorted[i] for i in range(len(y_sorted)-1)]
+
+        # X 경계로 열 너비 계산
+        x_values = set()
+        for c in tab.cells:
+            x_values.add(round(c[0], 1))
+            x_values.add(round(c[2], 1))
+        x_sorted = sorted(x_values)
+        col_widths = [x_sorted[i+1] - x_sorted[i] for i in range(len(x_sorted)-1)]
+
+        # 셀 폰트/정렬: extract()의 행/열 인덱스로 clip 직접 사용
         cell_fonts = []
         for ri in range(tab.row_count):
             row_fonts = []
             for ci in range(tab.col_count):
-                idx = ri * tab.col_count + ci
-                if idx < len(cells):
-                    cell_rect = fitz.Rect(cells[idx])
-                else:
-                    cell_rect = fitz.Rect()
+                # 이 셀의 clip 영역 계산
+                y0 = y_sorted[ri] if ri < len(y_sorted) else 0
+                y1 = y_sorted[ri+1] if ri+1 < len(y_sorted) else y0 + 30
+                x0 = x_sorted[ci] if ci < len(x_sorted) else 0
+                x1 = x_sorted[ci+1] if ci+1 < len(x_sorted) else x0 + 200
+                cell_rect = fitz.Rect(x0, y0, x1, y1)
                 fi = _extract_cell_font(page, cell_rect)
                 row_fonts.append(fi)
             cell_fonts.append(row_fonts)
 
         table_elements.append({
             "data": data, "rows": tab.row_count, "cols": tab.col_count,
-            "cells": cells, "cell_fonts": cell_fonts, "bbox": bbox,
+            "row_heights": row_heights, "col_widths": col_widths,
+            "cell_fonts": cell_fonts, "bbox": bbox,
         })
 
     # ── 표 바깥 텍스트 ──
@@ -107,11 +122,9 @@ def analyze_page(page, mode: str) -> dict:
                 if not text: continue
                 bbox = span["bbox"]
                 r = fitz.Rect(bbox)
-                # 표 내부 텍스트는 스킵
                 if any(tr.contains(r) or tr.intersects(r) for tr in table_rects):
                     continue
                 font = _normalize_font(span["font"])
-                # 정렬 감지
                 align = "left"
                 rel_x = span["origin"][0] / pw
                 if 0.35 < rel_x < 0.65:
@@ -136,7 +149,6 @@ def analyze_page(page, mode: str) -> dict:
         w_pt = ib.x1 - ib.x0
         h_pt = ib.y1 - ib.y0
         if w_pt < 1 or h_pt < 1: continue
-        # 이미지 데이터 추출
         try:
             img_data = page.parent.extract_image(xref)
             if not img_data or not img_data.get("image"):
@@ -167,7 +179,6 @@ def _extract_cell_font(page, cell_rect) -> dict:
                     fi["size"] = span["size"]
                     fi["font"] = _normalize_font(span["font"])
                     if "bold" in span["font"].lower(): fi["bold"] = True
-                    # 셀 내 정렬
                     x = span["origin"][0]
                     cw = cell_rect.x1 - cell_rect.x0
                     if cw > 0 and 0.25 < (x - cell_rect.x0) / cw < 0.75:
@@ -194,9 +205,11 @@ def build_docx(page_data: dict, mode: str) -> bytes:
     section.left_margin = Mm(margin_mm)
     section.right_margin = Mm(margin_mm)
 
+    margin_pt = margin_mm * MM_TO_PT
+
     # ── 표: 인라인 삽입 + Y 위치 space_before ──
     for tinfo in page_data["tables"]:
-        _add_table(doc, tinfo, margin_mm * MM_TO_PT)
+        _add_table(doc, tinfo, margin_pt)
 
     # ── 텍스트: 절대 위치 앵커 ──
     for tel in page_data["texts"]:
@@ -216,7 +229,8 @@ def _add_table(doc: Document, tinfo: dict, margin_pt: float):
     rows = tinfo["rows"]
     cols = tinfo["cols"]
     data = tinfo["data"]
-    cells = tinfo["cells"]
+    row_heights = tinfo["row_heights"]
+    col_widths = tinfo["col_widths"]
     cell_fonts = tinfo["cell_fonts"]
     bbox = tinfo["bbox"]
 
@@ -233,25 +247,21 @@ def _add_table(doc: Document, tinfo: dict, margin_pt: float):
     table.style = 'Table Grid'
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    # 행 높이
+    # 행 높이 (Y 경계 기반)
     for ri in range(rows):
-        idx = ri * cols
-        if idx < len(cells):
-            c = cells[idx]
-            row_h = c[3] - c[1]
+        if ri < len(row_heights):
+            row_h = row_heights[ri]
             if row_h > 0:
                 row = table.rows[ri]
                 row.height = Pt(row_h)
                 row.height_rule = 1  # EXACTLY
 
-    # 열 너비
-    if cols >= 2 and len(cells) >= cols:
-        table_w_mm = (bbox[2] - bbox[0]) * PT_TO_MM
-        col_ws = [cells[ci][2] - cells[ci][0] for ci in range(cols)]
-        total = sum(col_ws)
-        if total > 0:
-            for ci, col in enumerate(table.columns):
-                col.width = Mm(table_w_mm * col_ws[ci] / total)
+    # 열 너비 (X 경계 기반)
+    total_w = sum(col_widths)
+    if total_w > 0:
+        for ci in range(cols):
+            if ci < len(col_widths):
+                table.columns[ci].width = Mm(col_widths[ci] * PT_TO_MM)
 
     # 병합 행 감지 및 처리
     merged_rows = set()
@@ -280,7 +290,6 @@ def _add_table(doc: Document, tinfo: dict, margin_pt: float):
                 if li > 0: p = doc_cell.add_paragraph()
                 run = p.add_run(line)
                 _apply_font(run, fi)
-                # 정렬
                 if ri in merged_rows:
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 elif fi.get("align") == "center":
@@ -298,7 +307,6 @@ def _apply_font(run, fi: dict):
     run.font.name = fn
     if fi.get("bold"): run.bold = True
 
-    # 동아시아 폰트
     rPr = run._element.get_or_add_rPr()
     rFonts = rPr.find(qn('w:rFonts'))
     if rFonts is None:
@@ -327,28 +335,8 @@ def _add_anchored_text(doc: Document, tel: dict):
     """텍스트를 절대 위치 앵커 텍스트박스로 삽입."""
     x_pt = tel["x"]
     y_pt = tel["y"] - tel["size"]  # baseline → top
-    w_mm = 80  # 텍스트박스 너비 (충분히)
-    h_mm = tel["size"] * PT_TO_MM * 2
 
-    # 텍스트박스 생성
     p = doc.add_paragraph()
-    pPr = p._element.get_or_add_pPr()
-
-    # 앵커 프레임
-    anchor_xml = (
-        f'<wp:anchor distT="0" distB="0" distL="0" distR="0" '
-        f'simplePos="0" relativeHeight="2" behindDoc="0" '
-        f'locked="0" layoutInCell="1" allowOverlap="1" '
-        f'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">'
-        f'<wp:simplePos x="0" y="0"/>'
-        f'<wp:positionH relativeFrom="page"><wp:posOffset>{int(x_pt * 12700)}</wp:posOffset></wp:positionH>'
-        f'<wp:positionV relativeFrom="page"><wp:posOffset>{int(y_pt * 12700)}</wp:posOffset></wp:positionV>'
-        f'<wp:extent cx="{int(w_mm * 36000)}" cy="{int(h_mm * 36000)}"/>'
-        f'<wp:wrapNone/>'
-        f'<wp:docPr id="{hash(tel["text"]) % 10000 + 100}" name="TextBox"/>'
-        f'</wp:anchor>'
-    )
-
     run = p.add_run(tel["text"])
     _apply_font(run, tel)
     if tel.get("align") == "center":
@@ -368,11 +356,11 @@ def _add_anchored_image(doc: Document, img_el: dict, page_data: dict):
     img_stream = io.BytesIO(img_el["data"])
     p = doc.add_paragraph()
     pPr = p._element.get_or_add_pPr()
-    
+
     # add_picture로 inline 이미지 추가 후 anchor로 변환
     run = p.add_run()
     run.add_picture(img_stream, width=Mm(w_pt * PT_TO_MM), height=Mm(h_pt * PT_TO_MM))
-    
+
     # inline → anchor 변환
     r_elem = run._element
     drawing = r_elem.find(qn('w:drawing'))
@@ -384,16 +372,16 @@ def _add_anchored_image(doc: Document, img_el: dict, page_data: dict):
             cy = extent.get('cy', '0') if extent is not None else '0'
             docPr = inline.find(qn('wp:docPr'))
             doc_id = docPr.get('id', '1') if docPr is not None else '1'
-            
-            # 새 anchor XML 생성
-            # behindDoc: 표 영역과 겹치는 이미지는 배경으로, 나머지는 전경으로
+
+            # behindDoc: 표 영역과 겹치면 배경으로
             img_rect = fitz.Rect(bbox)
-            behind = "1"
+            behind = "0"
             for tinfo in page_data.get("tables", []):
                 tab_rect = fitz.Rect(tinfo["bbox"])
-                if not img_rect.intersects(tab_rect):
-                    behind = "0"
+                if img_rect.intersects(tab_rect):
+                    behind = "1"
                     break
+
             anchor_xml = (
                 f'<wp:anchor distT="0" distB="0" distL="0" distR="0" '
                 f'simplePos="0" relativeHeight="{img_el["xref"]}" behindDoc="{behind}" '
@@ -411,7 +399,7 @@ def _add_anchored_image(doc: Document, img_el: dict, page_data: dict):
                 f'</wp:anchor>'
             )
             anchor_elem = parse_xml(anchor_xml)
-            
+
             # inline의 자식 요소(graphic 등)를 anchor로 이동
             children_to_move = []
             for child in list(inline):
@@ -420,7 +408,7 @@ def _add_anchored_image(doc: Document, img_el: dict, page_data: dict):
             for child in children_to_move:
                 inline.remove(child)
                 anchor_elem.append(child)
-            
+
             drawing.remove(inline)
             drawing.append(anchor_elem)
 
@@ -455,12 +443,10 @@ def main():
     end = args.end if args.end >= 0 else len(pdf_doc) - 1
     log.info(f"변환 시작: {input_path} → {output_path} (모드={mode}, 페이지={args.start}~{end})")
 
-    # 첫 페이지 처리 (향후 다중 페이지 확장 가능)
     page = pdf_doc[args.start]
     page_data = analyze_page(page, mode)
     docx_bytes = build_docx(page_data, mode)
 
-    # 출력
     out_dir = os.path.dirname(os.path.abspath(output_path))
     os.makedirs(out_dir, exist_ok=True)
     with open(output_path, "wb") as f:
