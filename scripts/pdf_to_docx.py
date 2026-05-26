@@ -167,7 +167,7 @@ def analyze_page(page, mode: str) -> dict:
                     "size": span["size"], "font": font, "align": align,
                     "bold": "bold" in span["font"].lower()})
 
-    # 모든 이미지 — 텍스트 위에 오면 안 되므로 전부 behindDoc 대상
+    # 모든 이미지 — 텍스트/표와 겹치는 것만 behindDoc 대상
     image_elements = []
     for info in page.get_image_info(xrefs=True):
         xref = info.get("xref")
@@ -179,16 +179,22 @@ def analyze_page(page, mode: str) -> dict:
             img_data = page.parent.extract_image(xref)
             if not img_data or not img_data.get("image"): continue
         except: continue
+        # 텍스트/표와 겹치는지 자동 판별
+        in_table = any(fitz.Rect(t["bbox"]).intersects(ir) for t in table_elements)
+        overlaps_text = any(ir.intersects(fitz.Rect(t.get("x",0)-2, t["y"]-2, t.get("x",0)+200, t["y"]+2))
+                           for t in text_elements if "y" in t)
+        needs_behind = in_table or overlaps_text
         image_elements.append({"xref": xref, "bbox": info["bbox"], "w_pt": w_pt, "h_pt": h_pt,
-            "data": img_data["image"], "ext": img_data.get("ext","png")})
+            "data": img_data["image"], "ext": img_data.get("ext","png"), "needs_behind": needs_behind})
 
     return {"width": pw, "height": ph,
         "tables": table_elements, "texts": text_elements, "images": image_elements}
 
 
 def _add_anchored_image_to_para(doc, para, img_el, doc_pr_counter):
-    """문단에 inline 이미지를 추가한 후 anchor(behindDoc=1)로 변환.
-    모든 이미지는 텍스트 뒤(배경)에 위치해야 함."""
+    """문단에 inline 이미지를 추가한 후 anchor로 변환.
+    텍스트/표와 겹치는 이미지만 behindDoc=1, 나머지는 전경(behindDoc=0)."""
+    behind = "1" if img_el.get("needs_behind") else "0"
     x_emu = int(img_el["bbox"][0] * 12700)
     y_emu = int(img_el["bbox"][1] * 12700)
     w_emu = int(img_el["w_pt"] * 12700)
@@ -210,11 +216,11 @@ def _add_anchored_image_to_para(doc, para, img_el, doc_pr_counter):
     pic = graphicData.find(qn('pic:pic'))
     rId = pic.find(qn('pic:blipFill')).find(qn('a:blip')).get(qn('r:embed'))
 
-    # 모든 이미지 behindDoc=1 → 텍스트가 항상 위(편집 가능)
-    # relativeHeight=0 → 최하위 z-order
+    # behindDoc=1 → relativeHeight=0 (최하위), behindDoc=0 → relativeHeight=counter (전경)
+    rh = "0" if behind == "1" else str(counter)
     anchor_xml = (
         f'<wp:anchor distT="0" distB="0" distL="0" distR="0" '
-        f'simplePos="0" relativeHeight="0" behindDoc="1" '
+        f'simplePos="0" relativeHeight="{rh}" behindDoc="{behind}" '
         f'locked="0" layoutInCell="1" allowOverlap="1" '
         f'{nsdecls("wp","r","a","pic")}>'
         f'<wp:simplePos x="0" y="0"/>'
@@ -277,9 +283,13 @@ def build_docx(page_data: dict, mode: str) -> bytes:
         elif tel.get("align") == "right": p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
         p.paragraph_format.space_after = Pt(0)
         p.paragraph_format.line_spacing = Pt(tel["size"] * 1.15)
-        # 텍스트 문단에 흰색 배경 → 이미지 위에 텍스트 보이도록
-        shd = parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:color="auto" w:fill="FFFFFF"/>')
-        p._element.get_or_add_pPr().append(shd)
+        # behindDoc 이미지와 겹치는 텍스트만 흰색 배경
+        if any(img_el.get("needs_behind") and 
+               fitz.Rect(img_el["bbox"]).intersects(
+                   fitz.Rect(tel["x"]-2, tel["y"]-2, tel["x"]+200, tel["y"]+tel["size"]))
+               for img_el in page_data["images"]):
+            shd = parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:color="auto" w:fill="FFFFFF"/>')
+            p._element.get_or_add_pPr().append(shd)
         cursor_y = txt_y + tel["size"]
 
     # ── 3. 표 ──
@@ -309,9 +319,13 @@ def build_docx(page_data: dict, mode: str) -> bytes:
         elif tel.get("align") == "right": p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
         p.paragraph_format.space_after = Pt(0)
         p.paragraph_format.line_spacing = Pt(tel["size"] * 1.15)
-        # 텍스트 문단에 흰색 배경 → 이미지 위에 텍스트 보이도록
-        shd = parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:color="auto" w:fill="FFFFFF"/>')
-        p._element.get_or_add_pPr().append(shd)
+        # behindDoc 이미지와 겹치는 텍스트만 흰색 배경
+        if any(img_el.get("needs_behind") and 
+               fitz.Rect(img_el["bbox"]).intersects(
+                   fitz.Rect(tel["x"]-2, tel["y"]-2, tel["x"]+200, tel["y"]+tel["size"]))
+               for img_el in page_data["images"]):
+            shd = parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:color="auto" w:fill="FFFFFF"/>')
+            p._element.get_or_add_pPr().append(shd)
         cursor_y = txt_y + tel["size"]
 
     buf = io.BytesIO(); doc.save(buf)
