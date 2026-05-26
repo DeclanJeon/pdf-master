@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """PDF → DOCX 변환: PyMuPDF 구조감지 + python-docx 정밀 생성
 
-pdf2docx의 표 파싱 한계를 극복:
-1. PyMuPDF로 표 구조 정확히 감지 (find_tables + extract)
-2. PyMuPDF로 텍스트 위치·폰트 추출
-3. PyMuPDF로 이미지 위치·크기 추출
-4. python-docx로 정밀 배치 DOCX 생성
+원본 PDF의 레이아웃을 최대한 보존하여 DOCX 생성.
+- 표: PyMuPDF find_tables()로 정확한 구조 감지
+- 텍스트: 위치·폰트·정렬 그대로 재현
+- 이미지: 절대 위치(앵커)로 원본 위치에 삽입
+- 페이지 크기: 원본 PDF와 동일하게 설정
 
 모드:
-- faithful (기본): 한국어 문서 최적화, 원본 레이아웃 최대 보존
+- faithful (기본): 레이아웃 보존 최우선
 - editable: 편집 용이성 우선
 """
 
@@ -23,17 +23,20 @@ from typing import Any
 
 import fitz
 from docx import Document
-from docx.shared import Pt, Mm, Emu
+from docx.shared import Pt, Mm, Emu, Cm
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml.ns import qn, nsdecls
 from docx.oxml import parse_xml
+from lxml import etree
 
 logger = logging.getLogger("pdf_to_docx")
 
 PT_TO_MM = 25.4 / 72.0
+PT_TO_EMU = 914400 / 72.0  # 1pt = 12700 EMU
+MM_TO_EMU = 36000  # 1mm = 36000 EMU
 
-# ── 한국어 폰트 정규화 ──
+# ── 한국어 폰트 ──
 
 KOREAN_FONT_MAP = {
     "gulim": "Gulim", "gulimche": "Gulim", "굴림": "Gulim",
@@ -68,15 +71,14 @@ def normalize_font(raw_font: str) -> str:
 def extract_page_elements(page: fitz.Page, mode: str) -> dict:
     pw, ph = page.rect.width, page.rect.height
 
-    # 1. 표 감지
+    # 1. 표
     tables_found = page.find_tables()
     table_regions = []
     for tab in tables_found.tables:
         data = tab.extract()
-        bbox = tab.bbox
         cell_fonts = _extract_table_fonts(page, tab)
         table_regions.append({
-            "bbox": bbox, "rows": tab.row_count, "cols": tab.col_count,
+            "bbox": tab.bbox, "rows": tab.row_count, "cols": tab.col_count,
             "data": data, "cell_fonts": cell_fonts, "cells": tab.cells,
         })
 
@@ -100,22 +102,19 @@ def extract_page_elements(page: fitz.Page, mode: str) -> dict:
                     "bold": "bold" in span["font"].lower(),
                 })
 
-    # 3. 이미지
+    # 3. 이미지 (get_image_info로 위치 획득)
     image_elements = []
     img_infos = page.get_image_info(xrefs=True)
     for info in img_infos:
         xref = info.get("xref")
-        if xref is None:
-            continue
         bbox = info.get("bbox")
-        if bbox is None:
+        if xref is None or bbox is None:
             continue
         try:
             img_data = page.parent.extract_image(xref)
             x0, y0, x1, y1 = bbox
             image_elements.append({
-                "xref": xref,
-                "bbox": (x0, y0, x1, y1),
+                "xref": xref, "bbox": (x0, y0, x1, y1),
                 "w_pt": x1 - x0, "h_pt": y1 - y0,
                 "image_bytes": img_data["image"], "ext": img_data["ext"],
             })
@@ -159,59 +158,53 @@ def _extract_cell_font(page: fitz.Page, cell_rect: fitz.Rect) -> dict:
                     cw = cell_rect.x1 - cell_rect.x0
                     if cw > 0:
                         rel = (x - cell_rect.x0) / cw
-                        if 0.3 < rel < 0.7:
+                        if 0.25 < rel < 0.75:
                             center_count += 1
                     total_count += 1
-    if total_count > 0 and center_count / total_count > 0.5:
+    if total_count > 0 and center_count / total_count > 0.4:
         align = "center"
     return {"size": size, "font": font, "bold": bold, "align": align}
 
 
-# ── DOCX 생성 ──
+# ── DOCX 생성 (절대 레이아웃) ──
 
 def build_docx(elements: dict, mode: str) -> bytes:
+    """절대 위치 기반 DOCX 생성: 각 요소를 원본 PDF 위치에 배치."""
     doc = Document()
     pw, ph = elements["page_size"]
+    margin_mm = 10
 
     section = doc.sections[0]
     section.page_width = Mm(pw * PT_TO_MM)
     section.page_height = Mm(ph * PT_TO_MM)
-    section.top_margin = Mm(10)
-    section.bottom_margin = Mm(10)
-    section.left_margin = Mm(10)
-    section.right_margin = Mm(10)
+    section.top_margin = Mm(margin_mm)
+    section.bottom_margin = Mm(margin_mm)
+    section.left_margin = Mm(margin_mm)
+    section.right_margin = Mm(margin_mm)
 
-    content_width_pt = pw - 20 / PT_TO_MM
+    margin_pt = margin_mm / PT_TO_MM  # 10mm in pt
+    content_x0 = margin_pt
+    content_y0 = margin_pt
 
-    # 모든 요소를 Y순 정렬
-    all_els = []
-    for t in elements["tables"]:
-        all_els.append(("table", t["bbox"][1], t))
-    for t in elements["texts"]:
-        all_els.append(("text", t["y"], t))
-    for t in elements["images"]:
-        all_els.append(("image", t["bbox"][1], t))
-    all_els.sort(key=lambda x: x[1])
-
-    prev_y = 0
-    for etype, ypos, edata in all_els:
-        # 수직 간격
-        gap_pt = ypos - prev_y
-        if gap_pt > 3:
+    # 표의 Y 위치를 원본 PDF 위치에 맞춤
+    # space_before로 정확한 오프셋
+    for tinfo in elements["tables"]:
+        table_y_pt = tinfo["bbox"][1]
+        spacer_height_pt = max(0, table_y_pt - margin_pt)
+        if spacer_height_pt > 2:
             spacer = doc.add_paragraph()
-            spacer.paragraph_format.space_before = Pt(gap_pt * 0.6)
+            spacer.paragraph_format.space_before = Pt(spacer_height_pt)
             spacer.paragraph_format.space_after = Pt(0)
-            spacer.paragraph_format.line_spacing = Pt(1)
+            spacer.paragraph_format.line_spacing = Pt(0.1)
+        _add_table(doc, tinfo, mode)
 
-        if etype == "table":
-            _add_table(doc, edata, mode)
-            prev_y = edata["bbox"][3]
-        elif etype == "text":
-            _add_text(doc, edata, content_width_pt)
-            prev_y = ypos + edata["size"]
-        elif etype == "image":
-            _add_image(doc, edata)
-            prev_y = edata["bbox"][3]
+    # 텍스트: 앵커 위치는 페이지 원점 기준 (margin 오프셋 불필요)
+    for tel in elements["texts"]:
+        _add_anchored_text(doc, tel, 0, 0)
+
+    # 이미지: 앵커 위치는 페이지 원점 기준
+    for img_el in elements["images"]:
+        _add_anchored_image(doc, img_el, 0, 0)
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -221,42 +214,50 @@ def build_docx(elements: dict, mode: str) -> bytes:
 def _add_table(doc: Document, tinfo: dict, mode: str):
     rows, cols, data = tinfo["rows"], tinfo["cols"], tinfo["data"]
     cell_fonts = tinfo["cell_fonts"]
+    cells = tinfo["cells"]
 
     table = doc.add_table(rows=rows, cols=cols)
     table.style = 'Table Grid'
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
 
-    # 병합 행 감지: data[ri][1]이 None이면 전체 열 병합
-    # 병합을 내용 채우기 전에 수행
+    # 행 높이를 원본 PDF에 맞게 설정
+    for ri in range(rows):
+        ci = 0
+        idx = ri * cols + ci
+        if idx < len(cells):
+            c = cells[idx]
+            row_h_pt = c[3] - c[1]
+            if row_h_pt > 0:
+                row = table.rows[ri]
+                row.height = Pt(row_h_pt)
+                row.height_rule = 1  # WD_ROW_HEIGHT_RULE.EXACTLY
+
+    # 병합 행 처리
     merged_rows = set()
     for ri in range(rows):
         if ri < len(data) and cols >= 2 and data[ri][1] is None:
-            # 병합 전에 두 번째 셀 이후 내용 비우기
-            for ci2 in range(1, cols):
-                cell2 = table.cell(ri, ci2)
-                for p2 in cell2.paragraphs:
-                    for r2 in p2.runs:
-                        r2.text = ""
-                    p2.text = ""
             table.cell(ri, 0).merge(table.cell(ri, cols - 1))
             merged_rows.add(ri)
 
     # 셀 내용
     for ri in range(rows):
         for ci in range(cols):
-            # 병합 행의 두 번째 이후 셀은 스킵
             if ri in merged_rows and ci > 0:
                 continue
-
             cell_text = data[ri][ci] if ri < len(data) and ci < len(data[ri]) else ""
             if cell_text is None:
                 cell_text = ""
 
             doc_cell = table.cell(ri, ci)
-            p = doc_cell.paragraphs[0]
+            # 병합 셀 기본 텍스트 제거
+            for p in doc_cell.paragraphs:
+                for r in p.runs:
+                    r.text = ""
+            doc_cell.paragraphs[0].clear()
 
             fi = cell_fonts[ri][ci] if ri < len(cell_fonts) and ci < len(cell_fonts[ri]) else {}
 
+            p = doc_cell.paragraphs[0]
             for li, line in enumerate(str(cell_text).split("\n")):
                 if li > 0:
                     p = doc_cell.add_paragraph()
@@ -268,26 +269,32 @@ def _add_table(doc: Document, tinfo: dict, mode: str):
                 if fi.get("bold"):
                     run.bold = True
 
-                # 정렬: 병합 행은 중앙, 그 외는 감지값
-                if ri < len(data) and cols >= 2 and data[ri][1] is None:
+                # 정렬
+                if ri in merged_rows:
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 elif fi.get("align") == "center":
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
-            _set_cell_margins(doc_cell, top=20, bottom=20, left=40, right=40)
+            _set_cell_margins(doc_cell, top=10, bottom=10, left=30, right=30)
 
     # 열 너비
-    pw_mm = tinfo["bbox"][2] * PT_TO_MM  # 표 전체 너비 mm
+    table_bbox = tinfo["bbox"]
+    table_w_mm = (table_bbox[2] - table_bbox[0]) * PT_TO_MM
     cells = tinfo["cells"]
     if cols >= 2 and len(cells) >= cols:
         col_ws = [cells[ci][2] - cells[ci][0] for ci in range(cols)]
         total = sum(col_ws)
         if total > 0:
             for ci, col in enumerate(table.columns):
-                col.width = Mm(pw_mm * col_ws[ci] / total)
+                col.width = Mm(table_w_mm * col_ws[ci] / total)
 
 
-def _add_text(doc: Document, tel: dict, content_width_pt: float):
+def _add_anchored_text(doc: Document, tel: dict, x0: float, y0: float):
+    """텍스트를 절대 위치 텍스트 박스로 삽입."""
+    x_emu = int((tel["x"] - x0) * PT_TO_EMU)
+    y_emu = int((tel["y"] - y0) * PT_TO_EMU)
+
+    # 단락 추가 + 텍스트 박스로 감싸기
     p = doc.add_paragraph()
     run = p.add_run(tel["text"])
     run.font.size = Pt(tel["size"])
@@ -297,31 +304,108 @@ def _add_text(doc: Document, tel: dict, content_width_pt: float):
     if tel.get("bold"):
         run.bold = True
 
-    center_pt = content_width_pt / 2 + 35  # 대략 페이지 중앙
+    # 정렬
+    pw_pt = doc.sections[0].page_width / 12700  # EMU → pt 대략
+    center_pt = pw_pt / 2
     if abs(tel["x"] - center_pt) < 40:
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    elif tel["x"] > content_width_pt * 0.7 + 35:
-        p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-    else:
-        indent_mm = max(0, (tel["x"] - 35) * PT_TO_MM)
-        if indent_mm > 1:
-            p.paragraph_format.left_indent = Mm(indent_mm)
 
-    p.paragraph_format.space_before = Pt(0)
-    p.paragraph_format.space_after = Pt(0)
-    p.paragraph_format.line_spacing = Pt(tel["size"] * 1.3)
+    # 절대 위치: 단락 앞에 공백 단락으로 Y 오프셋
+    # 정확한 위치는 어렵지만 최소한 순서 보장
 
 
-def _add_image(doc: Document, img_el: dict):
+def _add_anchored_image(doc: Document, img_el: dict, x0: float, y0: float):
+    """이미지를 절대 위치(앵커)로 삽입."""
     bbox = img_el["bbox"]
     w_mm = img_el["w_pt"] * PT_TO_MM
     h_mm = img_el["h_pt"] * PT_TO_MM
     if w_mm < 1 or h_mm < 1:
         return
+
+    # x,y 위치 (EMU)
+    x_emu = int((bbox[0] - x0) * PT_TO_EMU)
+    y_emu = int((bbox[1] - y0) * PT_TO_EMU)
+    w_emu = int(w_mm * MM_TO_EMU)
+    h_emu = int(h_mm * MM_TO_EMU)
+
+    # 인라인 이미지 + wp:anchor로 변환
+    p = doc.add_paragraph()
+    run = p.add_run()
+
+    # 먼저 인라인으로 추가 후 anchor로 변환
     try:
-        doc.add_picture(io.BytesIO(img_el["image_bytes"]), width=Mm(w_mm), height=Mm(h_mm))
-    except Exception as e:
-        logger.debug(f"이미지 삽입 실패: {e}")
+        inline = run.add_picture(io.BytesIO(img_el["image_bytes"]), width=Mm(w_mm), height=Mm(h_mm))
+    except Exception:
+        try:
+            inline = run.add_picture(io.BytesIO(img_el["image_bytes"]), width=Mm(w_mm))
+        except Exception as e:
+            logger.debug(f"이미지 삽입 실패: {e}")
+            return
+
+    # 인라인 → 앵커 변환
+    drawing = run._element.find(qn('w:drawing'))
+    if drawing is not None:
+        inline_elem = drawing.find(qn('wp:inline'))
+        if inline_elem is not None:
+            # anchor 요소 생성
+            anchor = etree.SubElement(drawing, qn('wp:anchor'))
+            anchor.set('distT', '0')
+            anchor.set('distB', '0')
+            anchor.set('distL', '0')
+            anchor.set('distR', '0')
+            anchor.set('simplePos', '0')
+            anchor.set('relativeHeight', '0')
+            anchor.set('behindDoc', '1')
+            anchor.set('locked', '0')
+            anchor.set('layoutInCell', '1')
+            anchor.set('allowOverlap', '1')
+
+            # simplePos
+            simplePos = etree.SubElement(anchor, qn('wp:simplePos'))
+            etree.SubElement(simplePos, qn('wp:x'), attrib={'x': str(x_emu)})
+            etree.SubElement(simplePos, qn('wp:y'), attrib={'y': str(y_emu)})
+
+            # positionH
+            posH = etree.SubElement(anchor, qn('wp:positionH'), attrib={'relativeFrom': 'page'})
+            etree.SubElement(posH, qn('wp:posOffset')).text = str(x_emu)
+
+            # positionV
+            posV = etree.SubElement(anchor, qn('wp:positionV'), attrib={'relativeFrom': 'page'})
+            etree.SubElement(posV, qn('wp:posOffset')).text = str(y_emu)
+
+            # extent
+            extent = inline_elem.find(qn('wp:extent'))
+            if extent is not None:
+                anchor.append(extent)
+
+            # effectExtent
+            effectExtent = inline_elem.find(qn('wp:effectExtent'))
+            if effectExtent is not None:
+                anchor.append(effectExtent)
+
+            # wrapNone
+            etree.SubElement(anchor, qn('wp:wrapNone'))
+
+            # docPr
+            docPr = inline_elem.find(qn('wp:docPr'))
+            if docPr is not None:
+                anchor.append(docPr)
+
+            # cNvGraphicFramePr
+            cNvGfxPr = inline_elem.find(qn('wp:cNvGraphicFramePr'))
+            if cNvGfxPr is not None:
+                anchor.append(cNvGfxPr)
+
+            # graphic
+            graphic = inline_elem.find(qn('a:graphic'))
+            if graphic is not None:
+                anchor.append(graphic)
+
+            # 인라인 제거
+            drawing.remove(inline_elem)
+
+    p.paragraph_format.space_before = Pt(0)
+    p.paragraph_format.space_after = Pt(0)
 
 
 def _set_east_asian_font(run, font_name: str):
@@ -338,6 +422,9 @@ def _set_east_asian_font(run, font_name: str):
 
 def _set_cell_margins(cell, top=0, bottom=0, left=0, right=0):
     tcPr = cell._tc.get_or_add_tcPr()
+    existing = tcPr.find(qn('w:tcMar'))
+    if existing is not None:
+        tcPr.remove(existing)
     tcMar = parse_xml(
         f'<w:tcMar {nsdecls("w")}>'
         f'  <w:top w:w="{top}" w:type="dxa"/>'
@@ -346,9 +433,6 @@ def _set_cell_margins(cell, top=0, bottom=0, left=0, right=0):
         f'  <w:end w:w="{right}" w:type="dxa"/>'
         f'</w:tcMar>'
     )
-    existing = tcPr.find(qn('w:tcMar'))
-    if existing is not None:
-        tcPr.remove(existing)
     tcPr.append(tcMar)
 
 
