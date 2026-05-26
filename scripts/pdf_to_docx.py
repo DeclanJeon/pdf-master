@@ -211,9 +211,10 @@ def _add_anchored_image_to_para(doc, para, img_el, doc_pr_counter):
     rId = pic.find(qn('pic:blipFill')).find(qn('a:blip')).get(qn('r:embed'))
 
     # 모든 이미지 behindDoc=1 → 텍스트가 항상 위(편집 가능)
+    # relativeHeight=0 → 최하위 z-order
     anchor_xml = (
         f'<wp:anchor distT="0" distB="0" distL="0" distR="0" '
-        f'simplePos="0" relativeHeight="{counter}" behindDoc="1" '
+        f'simplePos="0" relativeHeight="0" behindDoc="1" '
         f'locked="0" layoutInCell="1" allowOverlap="1" '
         f'{nsdecls("wp","r","a","pic")}>'
         f'<wp:simplePos x="0" y="0"/>'
@@ -276,6 +277,9 @@ def build_docx(page_data: dict, mode: str) -> bytes:
         elif tel.get("align") == "right": p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
         p.paragraph_format.space_after = Pt(0)
         p.paragraph_format.line_spacing = Pt(tel["size"] * 1.15)
+        # 텍스트 문단에 흰색 배경 → 이미지 위에 텍스트 보이도록
+        shd = parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:color="auto" w:fill="FFFFFF"/>')
+        p._element.get_or_add_pPr().append(shd)
         cursor_y = txt_y + tel["size"]
 
     # ── 3. 표 ──
@@ -305,6 +309,9 @@ def build_docx(page_data: dict, mode: str) -> bytes:
         elif tel.get("align") == "right": p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
         p.paragraph_format.space_after = Pt(0)
         p.paragraph_format.line_spacing = Pt(tel["size"] * 1.15)
+        # 텍스트 문단에 흰색 배경 → 이미지 위에 텍스트 보이도록
+        shd = parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:color="auto" w:fill="FFFFFF"/>')
+        p._element.get_or_add_pPr().append(shd)
         cursor_y = txt_y + tel["size"]
 
     buf = io.BytesIO(); doc.save(buf)
@@ -319,6 +326,17 @@ def _add_table(doc: Document, tinfo: dict):
     table = doc.add_table(rows=rows, cols=cols)
     table.style = 'Table Grid'
     table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    # 표 전체에 흰색 배경 → behindDoc 이미지가 표 뒤로 감
+    tbl = table._tbl
+    tblPr = tbl.find(qn('w:tblPr'))
+    if tblPr is None:
+        tblPr = parse_xml(f'<w:tblPr {nsdecls("w")}/>')
+        tbl.insert(0, tblPr)
+    existing_shd = tblPr.find(qn('w:shd'))
+    if existing_shd is not None: tblPr.remove(existing_shd)
+    tblPr.append(parse_xml(
+        f'<w:shd {nsdecls("w")} w:val="clear" w:color="auto" w:fill="FFFFFF"/>'))
 
     for ri in range(rows):
         if ri < len(row_heights) and row_heights[ri] > 0:
@@ -367,6 +385,12 @@ def _add_table(doc: Document, tinfo: dict):
                 p.paragraph_format.line_spacing = Pt(sz * 1.2)
 
             _set_cell_margins(doc_cell, top=10, bottom=10, start=30, end=30)
+            # 셀에도 흰색 배경 → behindDoc 이미지 확실히 뒤로
+            tcPr = doc_cell._tc.get_or_add_tcPr()
+            existing_cell_shd = tcPr.find(qn('w:shd'))
+            if existing_cell_shd is not None: tcPr.remove(existing_cell_shd)
+            tcPr.append(parse_xml(
+                f'<w:shd {nsdecls("w")} w:val="clear" w:color="auto" w:fill="FFFFFF"/>'))
 
 
 def _apply_font(run, fi: dict):
