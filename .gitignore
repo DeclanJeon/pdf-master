@@ -1,1 +1,23 @@
-node_modules/\ndist/\ndist-server/\nuploads/\noutputs/\n*.env\n.DS_Store\n*.local
+node_modules/
+dist/
+dist-server/
+uploads/
+outputs/
+output/
+data/
+*.env
+.env
+.DS_Store
+*.local
+.agent-work/
+.agentdock/
+.omo/
+.playwright-mcp/
+.tmp-*
+repo_analysis/
+repo_analysis_report.md
+scripts/__pycache__/
+bin/
+
+# Rust build outputs
+tools/rhwp-ingest-exporter/target/

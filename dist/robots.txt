@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://pdfmaster.kr/sitemap.xml
