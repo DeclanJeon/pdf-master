@@ -1,0 +1,75 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+
+const tools = fs.readFileSync('src/lib/tools.ts', 'utf8');
+const generic = fs.readFileSync('src/components/tools/GenericPdfTool.tsx', 'utf8');
+const server = fs.readFileSync('server/index.ts', 'utf8');
+const dockerfile = fs.readFileSync('Dockerfile', 'utf8');
+const exporter = fs.readFileSync('tools/rhwp-ingest-exporter/src/main.rs', 'utf8');
+
+assert.match(tools, /id:\s*'pdf-to-hwp'/, 'tool id must remain pdf-to-hwp');
+assert.doesNotMatch(tools, /id:\s*'pdf-to-odt'/, 'pdf-to-odt must not replace PDF→HWP');
+assert.match(tools, /PDF → HWP/, 'tool name must expose PDF → HWP');
+
+assert.match(generic, /'pdf-to-hwp'/, 'GenericPdfTool must handle pdf-to-hwp');
+assert.match(generic, /\/api\/convert\/pdf-to-hwp/, 'frontend must call pdf-to-hwp endpoint');
+assert.doesNotMatch(generic, /\/api\/convert\/pdf-to-odt/, 'frontend must not call pdf-to-odt for PDF→HWP');
+assert.match(generic, /\.hwp/, 'PDF→HWP flow should download a real HWP file');
+assert.doesNotMatch(generic, /case 'pdf-to-hwp': \{[\s\S]*?\.hwpx[\s\S]*?break/, 'PDF→HWP flow must not download HWPX');
+
+assert.match(server, /RHWP_PATH/, 'server must configure rhwp binary path');
+assert.match(server, /RHWP_INGEST_EXPORTER_PATH/, 'server must configure the HWP ingest exporter path');
+assert.match(server, /PDFTOTEXT_PATH/, 'server must configure pdftotext for word-level editable coordinate extraction');
+assert.match(server, /PDFTOHTML_PATH/, 'server must configure pdftohtml for editable coordinate layout extraction');
+assert.match(server, /PDFTOPPM_PATH/, 'server must configure pdftoppm for original PDF page background preservation');
+assert.match(server, /PDF2DOCX_SCRIPT_PATH/, 'server must configure the pdf2docx conversion script');
+assert.match(server, /PDF_HWP_PRIMARY_PIPELINE/, 'server must configure the PDF→HWP primary pipeline');
+assert.match(server, /pdf2docx-docx/, 'PDF→HWP default should use the A안 pdf2docx→DOCX pipeline first');
+assert.match(server, /convertPdfToDocxWithPdf2docx/, 'PDF→HWP should call pdf2docx before HWP serialization');
+assert.doesNotMatch(server, /--infilter=writer_pdf_import/, 'PDF→HWP default must not use LibreOffice PDF→ODT import as the primary path');
+assert.match(server, /PDF_TEXT_ERASE_SCRIPT_PATH/, 'server may configure the optional text-erasing background cleanup script');
+assert.match(server, /python3-pil\(Pillow\)/, 'server must require Pillow for local-color background cleanup');
+assert.match(server, /\/api\/convert\/pdf-to-hwp/, 'server must expose pdf-to-hwp endpoint');
+assert.match(server, /--format', 'hwp'/, 'server must request HWP serialization');
+assert.match(server, /isHwp5File/, 'server must verify generated files are HWP5/OLE, not renamed HWPX');
+assert.match(server, /convertDocxToOdtForRhwpIngest/, 'PDF→HWP A안 should convert pdf2docx DOCX into an intermediate ODT for native HWP ingest');
+assert.match(server, /createRhwpIngestFromLibreOfficeOdt/, 'PDF→HWP should parse office layout into native HWP objects');
+assert.match(server, /pageSizePxToMm\(pageSize\)/, 'PDF→HWP ODT pipeline must propagate parsed source page size into HWP ingest');
+assert.match(server, /parseOdtPlainTextParagraphs/, 'PDF→HWP A안 must parse DOCX-origin ODT text:p paragraphs, not only draw:text-box frames');
+assert.match(server, /parseOdtTableLayoutStyles/, 'PDF→HWP A안 must parse DOCX-origin ODT table row/column/cell layout styles');
+assert.match(server, /parseOdtTablesIntoLayout/, 'PDF→HWP A안 must preserve ODT table grids as native editable HWP vector boxes and positioned text');
+assert.match(server, /parseOdtGraphicStyles\(`\$\{stylesXml\}\\n\$\{contentXml\}`\)/, 'PDF→HWP ODT pipeline must read graphic styles from styles.xml as well as content.xml');
+assert.match(server, /if \(frameStyle\.fill \|\| frameStyle\.stroke\) \{[\s\S]*?page\.boxes\.push\(\{[\s\S]*?fill: frameStyle\.fill/s, 'PDF→HWP ODT text-box frames must emit native filled/stroked boxes');
+assert.match(server, /contentXmlWithoutTables/, 'PDF→HWP A안 must avoid double-parsing table-anchored as-char frames at page origin');
+assert.match(server, /table:number-columns-spanned/, 'PDF→HWP A안 must account for merged/spanned ODT table cells');
+assert.match(server, /style:column-width/, 'PDF→HWP A안 must use ODT table column widths instead of guessing all table geometry');
+assert.match(server, /style:row-height/, 'PDF→HWP A안 must use ODT table row heights instead of guessing all table geometry');
+assert.match(server, /createRhwpIngestFromPdfHtmlLayout/, 'PDF→HWP should create editable coordinate-layout HWP, not page screenshots');
+assert.match(server, /PDF → HWP 변환 \(editable native HWP text\/images\/vector boxes/, 'PDF→HWP default path must be native editable HWP, not page background overlay');
+assert.match(server, /pdf_layout/, 'PDF→HWP ingest must carry PDF coordinates for layout reconstruction');
+assert.match(server, /createRhwpIngestFromPdfHtmlLayout\(layoutXml, pageImages\)/, 'PDF→HWP fallback should combine Poppler layout with editable coordinate text');
+assert.match(server, /applyPdfWordBboxLayout\(ingest, bboxLayoutXml\)/, 'PDF→HWP should use Poppler word boxes for tighter editable coordinate extraction');
+assert.match(server, /extractPdfVectorBoxes/, 'PDF→HWP should recover filled PDF vector rectangles dropped by DOCX/ODT conversion');
+assert.match(server, /mergePdfVectorBoxes\(ingest, await extractPdfVectorBoxes\(inputPath\)\)/, 'PDF→HWP should merge recovered PDF vector boxes before HWP export');
+assert.match(server, /bestIndex[\s\S]*?duplicateDistanceThreshold[\s\S]*?bestDistance <= duplicateDistanceThreshold[\s\S]*?page\.lines\.splice\(bestIndex, 1\)/, 'PDF→HWP should replace only a nearby matching misplaced ODT label, not a distant repeated label on the page');
+assert.match(server, /if \(!commandAvailable\(PYTHON_PATH, \['-c', 'import fitz'\]\)\) missing\.push\('python3-pymupdf\(PyMuPDF\)'\);\n  if \(PDF_HWP_PRIMARY_PIPELINE === 'pdf2docx-docx'\)/, 'PDF→HWP should require PyMuPDF for unconditional vector recovery regardless of primary pipeline');
+assert.match(server, /import fitz/, 'PDF→HWP should explicitly check PyMuPDF availability for vector recovery');
+assert.match(server, /pythonPyMuPDF/, 'PDF→HWP health should expose PyMuPDF availability');
+assert.match(exporter, /ordinary HWP body[\s\S]*paragraphs/, 'PDF→HWP clean mode should emit directly editable body paragraphs, not image-only output');
+assert.match(exporter, /install_page_background_image/, 'PDF→HWP clean mode should use a real page background instead of a full-page blocking shape');
+assert.match(server, /PDF_HWP_VISUAL_MODE === 'clean-background-visible-text'/, 'text erasing must be tied to the no-overlap editable visual mode');
+assert.doesNotMatch(server, /const ingest = createRhwpIngestFromPdfPageImages\(pageImages\);/, 'PDF→HWP endpoint must not default to image-only HWP output');
+assert.match(server, /format: 'hwp'/, 'server response must report HWP output');
+assert.doesNotMatch(server, /resultFilename: req\.file\.originalname\.replace\(\/\\\.pdf\\$\/i, '\.hwpx'\)/, 'server must not return HWPX filenames for PDF→HWP');
+assert.match(server, /PDF_TO_HWP_UNAVAILABLE/, 'server must return deterministic rhwp unavailable errors');
+assert.doesNotMatch(server, /app\.post\('\/api\/convert\/pdf-to-odt'/, 'server should not expose ODT as the PDF→HWP implementation');
+
+assert.match(dockerfile, /qpdf/, 'Docker image must install qpdf');
+assert.match(dockerfile, /python3-pip/, 'Docker image must install pip for pdf2docx');
+assert.match(dockerfile, /pdf2docx/, 'Docker image must install pdf2docx for A안 PDF→DOCX pipeline');
+assert.match(dockerfile, /poppler-utils/, 'Docker image must install poppler-utils for PDF text extraction');
+assert.match(dockerfile, /python3-pil/, 'Docker image must install Pillow for no-overlap PDF background cleanup');
+assert.match(dockerfile, /rhwp/, 'Docker image must install/build rhwp');
+assert.match(dockerfile, /rhwp-ingest-exporter/, 'Docker image must build/install the HWP ingest exporter');
+
+console.log('pdf-to-hwp static contract passed');

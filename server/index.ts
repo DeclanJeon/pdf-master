@@ -30,7 +30,11 @@ const PDFTOTEXT_PATH = process.env.PDFTOTEXT_PATH || 'pdftotext';
 const PDFTOHTML_PATH = process.env.PDFTOHTML_PATH || 'pdftohtml';
 const PDFTOPPM_PATH = process.env.PDFTOPPM_PATH || 'pdftoppm';
 const PDF2DOCX_SCRIPT_PATH = process.env.PDF2DOCX_SCRIPT_PATH || path.resolve(__dirname, '../scripts/pdf_to_docx.py');
-const PDF2DOCX_MODE = process.env.PDF2DOCX_MODE || process.env.PDF2DOCX_LAYOUT_MODE || 'faithful';
+const PDF2DOCX_MODE_CANDIDATE = process.env.PDF2DOCX_LAYOUT_MODE || process.env.PDF2DOCX_MODE || 'absolute';
+const PDF2DOCX_LAYOUT_MODE = ['faithful', 'editable', 'absolute'].includes(PDF2DOCX_MODE_CANDIDATE)
+  ? PDF2DOCX_MODE_CANDIDATE
+  : 'absolute';
+const ODT_TO_HWPX_SCRIPT_PATH = process.env.ODT_TO_HWPX_SCRIPT_PATH || path.resolve(__dirname, '../scripts/odt_to_hwpx.py');
 const PDF_HWP_PRIMARY_PIPELINE = process.env.PDF_HWP_PRIMARY_PIPELINE || 'pdf2docx-docx';
 const QPDF_PATH = process.env.QPDF_PATH || 'qpdf';
 const GHOSTSCRIPT_PATH = process.env.GHOSTSCRIPT_PATH || process.env.GS_PATH || 'gs';
@@ -572,7 +576,7 @@ function listRenderedPdfPageImages(jobDir: string): PdfPageImage[] {
 function createRhwpIngestFromPdfPageImages(images: PdfPageImage[]) {
   return {
     version: '1',
-    page_size: { width_mm: 210, height_mm: 297 },
+    page_size: DEFAULT_HWP_PAGE_SIZE_MM,
     default_font: '함초롬바탕',
     questions: images.map((image, index) => ({
       number: index + 1,
@@ -599,7 +603,22 @@ function createRhwpIngestFromPdfPageImages(images: PdfPageImage[]) {
   };
 }
 
-function createRhwpIngestFromPdfText(pages: string[]) {
+const DEFAULT_HWP_PAGE_SIZE_MM = { width_mm: 210, height_mm: 297 };
+
+function pxToMm(value: number): number {
+  return Number(((value * 25.4) / 96).toFixed(3));
+}
+
+function pageSizePxToMm(pageSize: { width: number; height: number }) {
+  const widthMm = pxToMm(pageSize.width);
+  const heightMm = pxToMm(pageSize.height);
+  return {
+    width_mm: widthMm > 0 ? widthMm : DEFAULT_HWP_PAGE_SIZE_MM.width_mm,
+    height_mm: heightMm > 0 ? heightMm : DEFAULT_HWP_PAGE_SIZE_MM.height_mm,
+  };
+}
+
+function createRhwpIngestFromPdfText(pages: string[], pageSize = DEFAULT_HWP_PAGE_SIZE_MM) {
   const toTextBlocks = (text: string, index: number) => {
     const lines = text
       .replace(/\r\n/g, '\n')
@@ -618,7 +637,7 @@ function createRhwpIngestFromPdfText(pages: string[]) {
 
   return {
     version: '1',
-    page_size: { width_mm: 210, height_mm: 297 },
+    page_size: pageSize,
     default_font: '함초롬바탕',
     questions: pages.map((text, index) => {
       const stemBlocks = toTextBlocks(text, index);
@@ -668,6 +687,30 @@ interface PdfLayoutPage {
   images: PdfLayoutImage[];
   lines: PdfLayoutTextLine[];
   boxes: Array<{ x: number; y: number; width: number; height: number; stroke?: string; fill?: string }>;
+  tables?: PdfLayoutTable[];
+}
+
+interface PdfLayoutTableCell {
+  row: number;
+  col: number;
+  row_span: number;
+  col_span: number;
+  text: string;
+  font_family?: string;
+  font_size?: number;
+  bold?: boolean;
+  color?: string;
+  style?: { stroke?: string; fill?: string };
+}
+
+interface PdfLayoutTable {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  columns: number[];
+  row_heights: number[];
+  cells: PdfLayoutTableCell[];
 }
 
 type PdfLayoutIngest = ReturnType<typeof createRhwpIngestFromPdfText> & {
@@ -753,6 +796,19 @@ function parseXmlAttributes(value: string): Record<string, string> {
     attrs[match[1]] = match[2];
   }
   return attrs;
+}
+
+function resolveOdtHref(rootDir: string, href: string): string | null {
+  if (!href || href.includes('\0') || /^[a-z][a-z0-9+.-]*:/i.test(href) || path.isAbsolute(href)) {
+    return null;
+  }
+  const root = path.resolve(rootDir);
+  const resolved = path.resolve(root, href);
+  const relative = path.relative(root, resolved);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    return null;
+  }
+  return resolved;
 }
 
 function decodeXmlEntities(value: string): string {
@@ -904,6 +960,151 @@ function parseOdtPageSize(stylesXml: string): { width: number; height: number } 
   };
 }
 
+interface PdfVectorBoxPage {
+  width: number;
+  height: number;
+  boxes: Array<{ x: number; y: number; width: number; height: number; stroke?: string; fill?: string }>;
+  lines: PdfLayoutTextLine[];
+}
+
+async function extractPdfVectorBoxes(inputPath: string): Promise<PdfVectorBoxPage[]> {
+  const script = String.raw`
+import json
+import sys
+
+try:
+    import fitz
+except Exception:
+    print(json.dumps([]))
+    raise SystemExit(0)
+
+def color_to_hex(color):
+    if color is None:
+        return None
+    if isinstance(color, int):
+        return '#%06X' % (color & 0xFFFFFF)
+    try:
+        r, g, b = color[:3]
+    except Exception:
+        return None
+    return '#%02X%02X%02X' % (round(max(0, min(1, r)) * 255), round(max(0, min(1, g)) * 255), round(max(0, min(1, b)) * 255))
+
+def center_inside(rect, box):
+    cx = (rect[0] + rect[2]) / 2
+    cy = (rect[1] + rect[3]) / 2
+    return box['x'] <= cx <= box['x'] + box['width'] and box['y'] <= cy <= box['y'] + box['height']
+
+pages = []
+doc = fitz.open(sys.argv[1])
+for page in doc:
+    boxes = []
+    for drawing in page.get_drawings():
+        fill = color_to_hex(drawing.get('fill'))
+        if not fill:
+            continue
+        rect = drawing.get('rect')
+        if rect is None:
+            continue
+        width = float(rect.x1 - rect.x0)
+        height = float(rect.y1 - rect.y0)
+        if width <= 1 or height <= 1:
+            continue
+        boxes.append({
+            'x': float(rect.x0),
+            'y': float(rect.y0),
+            'width': width,
+            'height': height,
+            'stroke': color_to_hex(drawing.get('color')),
+            'fill': fill,
+        })
+    lines = []
+    text = page.get_text('dict')
+    for block in text.get('blocks', []):
+        if block.get('type') != 0:
+            continue
+        for line in block.get('lines', []):
+            spans = line.get('spans', [])
+            content = ''.join(span.get('text', '') for span in spans).strip()
+            bbox = line.get('bbox')
+            if not content or not bbox or not any(center_inside(bbox, box) for box in boxes if box.get('fill')):
+                continue
+            span = spans[0] if spans else {}
+            lines.append({
+                'text': content,
+                'x': float(bbox[0]),
+                'y': float(bbox[1]),
+                'width': float(bbox[2] - bbox[0]),
+                'height': float(bbox[3] - bbox[1]),
+                'font_family': span.get('font') or 'Helvetica',
+                'font_size': float(span.get('size') or max(1, bbox[3] - bbox[1])),
+                'bold': bool(span.get('flags', 0) & 16),
+                'color': color_to_hex(span.get('color')) or '#000000',
+            })
+    pages.append({'width': float(page.rect.width), 'height': float(page.rect.height), 'boxes': boxes, 'lines': lines})
+print(json.dumps(pages))
+`;
+  try {
+    const { stdout } = await execFileAsync(PYTHON_PATH, ['-c', script, inputPath], { timeout: 60000, maxBuffer: 5 * 1024 * 1024 });
+    const parsed = JSON.parse(stdout || '[]') as PdfVectorBoxPage[];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    console.warn(`[PDF→HWP] PDF vector box extraction skipped: ${err instanceof Error ? err.message : err}`);
+    return [];
+  }
+}
+
+function mergePdfVectorBoxes(ingest: PdfLayoutIngest, vectorPages: PdfVectorBoxPage[]) {
+  const pages = ingest.pdf_layout?.pages;
+  if (!pages || vectorPages.length === 0) return;
+  pages.forEach((page, index) => {
+    const vectorPage = vectorPages[index];
+    if (!vectorPage || vectorPage.width <= 0 || vectorPage.height <= 0) return;
+    const sx = page.width / vectorPage.width;
+    const sy = page.height / vectorPage.height;
+    for (const box of vectorPage.boxes) {
+      page.boxes.push({
+        x: box.x * sx,
+        y: box.y * sy,
+        width: box.width * sx,
+        height: box.height * sy,
+        stroke: box.stroke,
+        fill: box.fill,
+      });
+    }
+    for (const line of vectorPage.lines) {
+      const recoveredLine = {
+        ...line,
+        x: line.x * sx,
+        y: line.y * sy,
+        width: line.width * sx,
+        height: line.height * sy,
+        font_size: line.font_size * sx,
+      };
+      const recoveredKey = normalizePdfWord(recoveredLine.text).toLowerCase();
+      if (recoveredKey) {
+        let bestIndex = -1;
+        let bestDistance = Number.POSITIVE_INFINITY;
+        const recoveredCenterX = recoveredLine.x + recoveredLine.width / 2;
+        const recoveredCenterY = recoveredLine.y + recoveredLine.height / 2;
+        for (let lineIndex = 0; lineIndex < page.lines.length; lineIndex += 1) {
+          const existingLine = page.lines[lineIndex];
+          if (normalizePdfWord(existingLine.text).toLowerCase() !== recoveredKey) continue;
+          const existingCenterX = existingLine.x + existingLine.width / 2;
+          const existingCenterY = existingLine.y + existingLine.height / 2;
+          const distance = Math.hypot(existingCenterX - recoveredCenterX, existingCenterY - recoveredCenterY);
+          if (distance < bestDistance) {
+            bestDistance = distance;
+            bestIndex = lineIndex;
+          }
+        }
+        const duplicateDistanceThreshold = Math.max(12, recoveredLine.height * 2);
+        if (bestIndex >= 0 && bestDistance <= duplicateDistanceThreshold) page.lines.splice(bestIndex, 1);
+      }
+      page.lines.push(recoveredLine);
+    }
+  });
+}
+
 function parseOdtPlainTextParagraphs(
   xml: string,
   pageSize: { width: number; height: number },
@@ -955,6 +1156,7 @@ function parseOdtTablesIntoLayout(
   odtExtractDir: string,
   jobDir: string,
   page: PdfLayoutPage,
+  pageSize: { width: number; height: number },
   textStyles: Map<string, { font_family: string; font_size: number; bold: boolean; color: string }>,
   tableStyles: OdtTableLayoutStyles,
 ) {
@@ -963,6 +1165,10 @@ function parseOdtTablesIntoLayout(
   let tableY = 72;
 
   while ((tableMatch = tableRegex.exec(xml)) !== null) {
+    const leadingXml = xml.slice(0, tableMatch.index).replace(/<table:table(?!-)\b[\s\S]*?<\/table:table>/g, '');
+    const leadingLines = parseOdtPlainTextParagraphs(leadingXml, pageSize, textStyles);
+    const leadingBottom = leadingLines.reduce((bottom, line) => Math.max(bottom, line.y + line.height), 0);
+    if (leadingBottom > 0) tableY = Math.max(tableY, leadingBottom + 10);
     const tableBody = tableMatch[2];
     const columns: number[] = [];
     const columnRegex = /<table:table-column\b([^>]*?)\/>/g;
@@ -978,12 +1184,16 @@ function parseOdtTablesIntoLayout(
     const tableWidth = columns.reduce((sum, value) => sum + value, 0);
     const tableX = Math.max(0, (page.width - tableWidth) / 2);
     let rowY = tableY;
+    const tableRowHeights: number[] = [];
+    const tableCells: PdfLayoutTableCell[] = [];
     const rowRegex = /<table:table-row\b([^>]*)>([\s\S]*?)<\/table:table-row>/g;
     let rowMatch: RegExpExecArray | null;
     while ((rowMatch = rowRegex.exec(tableBody)) !== null) {
       const rowAttrs = parseXmlAttributes(rowMatch[1]);
       const rowBody = rowMatch[2];
       const rowHeight = Math.max(18, tableStyles.rows.get(rowAttrs['table:style-name'] || '') || 28);
+      tableRowHeights.push(rowHeight);
+      const rowIndex = tableRowHeights.length - 1;
       let colIndex = 0;
       let cellMatch: RegExpExecArray | null;
       const cellRegex = /<table:(table-cell|covered-table-cell)\b([^>]*)(?:\/>|>([\s\S]*?)<\/table:table-cell>)/g;
@@ -1015,7 +1225,8 @@ function parseOdtTablesIntoLayout(
           const imageAttrs = parseXmlAttributes(imageMatch?.[1] || '');
           const href = imageAttrs['xlink:href'];
           if (!href) continue;
-          const sourcePath = path.join(odtExtractDir, href);
+          const sourcePath = resolveOdtHref(odtExtractDir, href);
+          if (!sourcePath) continue;
           if (!fs.existsSync(sourcePath)) continue;
           const ext = path.extname(href) || '.png';
           const id = `odt-table-image-${page.images.length + 1}${ext}`;
@@ -1037,36 +1248,45 @@ function parseOdtTablesIntoLayout(
 
         const paragraphRegex = /<text:p\b([^>]*)>([\s\S]*?)<\/text:p>/g;
         let paragraphMatch: RegExpExecArray | null;
-        let textY = rowY + 3;
+        const cellTextLines: string[] = [];
+        let cellTextStyle: { font_family: string; font_size: number; bold: boolean; color: string } | null = null;
         while ((paragraphMatch = paragraphRegex.exec(cellBody)) !== null) {
+          const paragraphAttrs = parseXmlAttributes(paragraphMatch[1]);
           const text = decodeOdfText(paragraphMatch[2]);
           if (!text) continue;
-          const pAttrs = parseXmlAttributes(paragraphMatch[1]);
           const spanStyle = paragraphMatch[2].match(/<text:span\b[^>]*text:style-name="([^"]+)"/)?.[1];
-          const style = (spanStyle && textStyles.get(spanStyle)) || (pAttrs['text:style-name'] && textStyles.get(pAttrs['text:style-name'])) || {
-            font_family: '함초롬바탕',
-            font_size: Math.max(8, rowHeight * 0.36),
-            bold: false,
-            color: '#000000',
-          };
-          const lineHeight = Math.max(10, style.font_size * 1.25);
-          page.lines.push({
-            text,
-            x: x + 4,
-            y: textY,
-            width: Math.max(1, width - 8),
-            height: Math.min(rowHeight, lineHeight),
-            font_family: style.font_family,
-            font_size: style.font_size,
-            bold: style.bold,
-            color: style.color,
-          });
-          textY += lineHeight + 2;
+          const paragraphStyle = (spanStyle && textStyles.get(spanStyle))
+            || (paragraphAttrs['text:style-name'] && textStyles.get(paragraphAttrs['text:style-name']))
+            || null;
+          if (!cellTextStyle && paragraphStyle) cellTextStyle = paragraphStyle;
+          cellTextLines.push(text);
         }
+        tableCells.push({
+          row: rowIndex,
+          col: colIndex,
+          row_span: Math.max(1, Number(cellAttrs['table:number-rows-spanned'] || 1) || 1),
+          col_span: span,
+          text: cellTextLines.join('\n').trim(),
+          font_family: cellTextStyle?.font_family,
+          font_size: cellTextStyle?.font_size,
+          bold: cellTextStyle?.bold,
+          color: cellTextStyle?.color,
+          style: { stroke: cellStyle.stroke || '#000000', fill: cellStyle.fill },
+        });
         colIndex += span;
       }
       rowY += rowHeight;
     }
+    page.tables = page.tables || [];
+    page.tables.push({
+      x: tableX,
+      y: tableY,
+      width: tableWidth,
+      height: Math.max(1, rowY - tableY),
+      columns,
+      row_heights: tableRowHeights,
+      cells: tableCells,
+    });
     tableY = rowY + 10;
   }
 }
@@ -1201,13 +1421,13 @@ async function extractOdtArchive(odtPath: string, extractDir: string) {
 }
 
 async function convertPdfToDocxWithPdf2docx(inputPath: string, jobDir: string, convertMode?: string): Promise<string> {
-  const mode = (convertMode && ['faithful', 'editable'].includes(convertMode)) ? convertMode : PDF2DOCX_MODE;
+  const mode = (convertMode && ['faithful', 'editable', 'absolute'].includes(convertMode)) ? convertMode : PDF2DOCX_LAYOUT_MODE;
   const docxPath = path.join(jobDir, 'pdf2docx-output.docx');
   await execFileAsync(PYTHON_PATH, [
     PDF2DOCX_SCRIPT_PATH,
     inputPath,
     docxPath,
-    '--mode',
+    '--layout-mode',
     mode,
   ], { timeout: 180000, maxBuffer: 20 * 1024 * 1024, env: { ...process.env, LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8' } });
   if (!fs.existsSync(docxPath) || fs.statSync(docxPath).size === 0) {
@@ -1248,9 +1468,10 @@ function createRhwpIngestFromLibreOfficeOdt(odtExtractDir: string, jobDir: strin
   const contentXml = fs.readFileSync(contentPath, 'utf8');
   const stylesXml = fs.existsSync(stylesPath) ? fs.readFileSync(stylesPath, 'utf8') : '';
   const textStyles = parseOdtTextStyles(contentXml);
-  const graphicStyles = parseOdtGraphicStyles(contentXml);
+  const graphicStyles = parseOdtGraphicStyles(`${stylesXml}\n${contentXml}`);
   const tableStyles = parseOdtTableLayoutStyles(contentXml);
   const contentXmlWithoutTables = contentXml.replace(/<table:table(?!-)\b[\s\S]*?<\/table:table>/g, '');
+  const contentXmlWithoutTablesAndFrames = contentXmlWithoutTables.replace(/<draw:frame\b[\s\S]*?<\/draw:frame>/g, '');
   const pageSize = parseOdtPageSize(stylesXml);
   const pages = new Map<number, PdfLayoutPage>();
   const ensurePage = (pageNumber: number) => {
@@ -1267,7 +1488,7 @@ function createRhwpIngestFromLibreOfficeOdt(odtExtractDir: string, jobDir: strin
     return pages.get(pageIndex)!;
   };
 
-  parseOdtTablesIntoLayout(contentXml, odtExtractDir, jobDir, ensurePage(1), textStyles, tableStyles);
+  parseOdtTablesIntoLayout(contentXml, odtExtractDir, jobDir, ensurePage(1), pageSize, textStyles, tableStyles);
 
   const frameRegex = /<draw:frame\b([^>]*)>([\s\S]*?)<\/draw:frame>/g;
   let frameMatch: RegExpExecArray | null;
@@ -1285,8 +1506,8 @@ function createRhwpIngestFromLibreOfficeOdt(odtExtractDir: string, jobDir: strin
       const imageAttrs = parseXmlAttributes(imageMatch[1]);
       const href = imageAttrs['xlink:href'];
       if (href) {
-        const sourcePath = path.join(odtExtractDir, href);
-        if (fs.existsSync(sourcePath)) {
+        const sourcePath = resolveOdtHref(odtExtractDir, href);
+        if (sourcePath && fs.existsSync(sourcePath)) {
           const ext = path.extname(href) || '.png';
           const id = `odt-image-${page.images.length + 1}${ext}`;
           fs.copyFileSync(sourcePath, path.join(jobDir, id));
@@ -1307,6 +1528,17 @@ function createRhwpIngestFromLibreOfficeOdt(odtExtractDir: string, jobDir: strin
     }
 
     if (/<draw:text-box\b/i.test(body)) {
+      const frameStyle = graphicStyles.get(attrs['draw:style-name'] || '') || {};
+      if (frameStyle.fill || frameStyle.stroke) {
+        page.boxes.push({
+          x,
+          y,
+          width,
+          height,
+          stroke: frameStyle.stroke,
+          fill: frameStyle.fill,
+        });
+      }
       const text = decodeOdfText(body);
       if (!text) continue;
       const spanStyle = body.match(/<text:span\b[^>]*text:style-name="([^"]+)"/)?.[1];
@@ -1366,11 +1598,28 @@ function createRhwpIngestFromLibreOfficeOdt(odtExtractDir: string, jobDir: strin
     });
   }
 
-  const hasTextLines = [...pages.values()].some((page) => page.lines.length > 0);
-  if (!hasTextLines) {
-    const plainTextLines = parseOdtPlainTextParagraphs(contentXmlWithoutTables, pageSize, textStyles);
-    if (plainTextLines.length > 0) {
-      ensurePage(1).lines.push(...plainTextLines);
+  const plainTextLines = parseOdtPlainTextParagraphs(contentXmlWithoutTablesAndFrames, pageSize, textStyles);
+  if (plainTextLines.length > 0) {
+    const firstPage = ensurePage(1);
+    const existingTextSet = new Set(
+      firstPage.lines.map((line) => normalizePdfWord(line.text).toLowerCase()).filter(Boolean),
+    );
+    let plainCursorY = 0;
+    const nativeTables = firstPage.tables || [];
+    for (const plainLine of plainTextLines) {
+      const normalized = normalizePdfWord(plainLine.text).toLowerCase();
+      if (!normalized || existingTextSet.has(normalized)) continue;
+      const adjustedLine = { ...plainLine };
+      for (const table of nativeTables) {
+        const lineBottom = adjustedLine.y + adjustedLine.height;
+        const tableBottom = table.y + table.height;
+        if (adjustedLine.y < tableBottom && lineBottom > table.y) {
+          adjustedLine.y = tableBottom + 10;
+        }
+      }
+      if (adjustedLine.y < plainCursorY) adjustedLine.y = plainCursorY;
+      plainCursorY = adjustedLine.y + adjustedLine.height + 4;
+      firstPage.lines.push(adjustedLine);
     }
   }
 
@@ -1379,10 +1628,22 @@ function createRhwpIngestFromLibreOfficeOdt(odtExtractDir: string, jobDir: strin
     lines: page.lines.sort((a, b) => a.y - b.y || a.x - b.x),
     boxes: page.boxes.sort((a, b) => a.y - b.y || a.x - b.x),
     images: page.images.sort((a, b) => a.y - b.y || a.x - b.x),
+    tables: (page.tables || []).sort((a, b) => a.y - b.y || a.x - b.x),
   }));
   const fallbackText = 'PDF에서 추출 가능한 텍스트가 없습니다. 스캔 이미지 PDF는 OCR 단계가 필요합니다.';
   const ingest = createRhwpIngestFromPdfText(
-    orderedPages.length > 0 ? orderedPages.map((page) => page.lines.map((line) => line.text).join('\n').trim() || fallbackText) : [fallbackText],
+    orderedPages.length > 0
+      ? orderedPages.map((page) => {
+        const lineText = page.lines.map((line) => line.text);
+        const tableText = (page.tables || [])
+          .flatMap((table) => [...table.cells]
+            .sort((a, b) => a.row - b.row || a.col - b.col)
+            .map((cell) => cell.text)
+            .filter(Boolean));
+        return [...lineText, ...tableText].join('\n').trim() || fallbackText;
+      })
+      : [fallbackText],
+    pageSizePxToMm(pageSize),
   ) as PdfLayoutIngest;
   ingest.pdf_layout = {
     unit: 'odt',
@@ -1442,9 +1703,9 @@ function findStyleForBboxWord(
 }
 
 function glyphWeight(ch: string): number {
-  if (!/^[\x00-\x7F]$/.test(ch)) return 1;
-  if (/[ilI\.,:;!'`|]/.test(ch)) return 0.28;
-  if (/[fjt\[\]\(\)]/.test(ch)) return 0.36;
+  if (ch.charCodeAt(0) > 0x7F) return 1;
+  if (/[ilI.,:;!'`|]/.test(ch)) return 0.28;
+  if ('fjt[]()'.includes(ch)) return 0.36;
   if (/[MW@#%&]/.test(ch)) return 0.9;
   if (/[A-Z0-9]/.test(ch)) return 0.62;
   return 0.52;
@@ -1783,27 +2044,37 @@ function constantTimeEquals(expected: Buffer, actual: Buffer): boolean {
 
 function signatureCandidates(signatureHeader: string): string[] {
   return signatureHeader
-    .split(',')
+    .split(/[\s,]+/)
     .map((part) => part.trim())
     .flatMap((part) => {
       const value = part.includes('=') ? part.slice(part.indexOf('=') + 1) : part;
-      return value ? [value] : [];
+      return value && value !== 'v1' ? [value.replace(/^v1,/, '')] : [];
     });
+}
+
+function polarWebhookSecretBytes(): Buffer {
+  if (!POLAR_WEBHOOK_SECRET.startsWith('whsec_')) return Buffer.from(POLAR_WEBHOOK_SECRET);
+  return Buffer.from(POLAR_WEBHOOK_SECRET.slice('whsec_'.length), 'base64');
 }
 
 function verifyPolarWebhookSignature(req: Request): boolean {
   if (!POLAR_WEBHOOK_SECRET) return false;
   const signatureHeader = req.get('polar-webhook-signature') || req.get('webhook-signature') || '';
+  const webhookId = req.get('webhook-id') || req.get('polar-webhook-id') || '';
+  const webhookTimestamp = req.get('webhook-timestamp') || req.get('polar-webhook-timestamp') || '';
   if (!signatureHeader) return false;
+  if (!webhookId || !webhookTimestamp) return false;
 
   const body = rawBodyForSignature(req);
-  const expectedHex = crypto.createHmac('sha256', POLAR_WEBHOOK_SECRET).update(body).digest('hex');
-  const expectedBase64 = crypto.createHmac('sha256', POLAR_WEBHOOK_SECRET).update(body).digest('base64');
+  const signedPayload = Buffer.concat([
+    Buffer.from(`${webhookId}.${webhookTimestamp}.`),
+    body,
+  ]);
+  const expectedBase64 = crypto.createHmac('sha256', polarWebhookSecretBytes()).update(signedPayload).digest('base64');
 
   return signatureCandidates(signatureHeader).some((candidate) => {
     const normalized = candidate.replace(/^sha256=/, '');
-    return constantTimeEquals(Buffer.from(expectedHex), Buffer.from(normalized))
-      || constantTimeEquals(Buffer.from(expectedBase64), Buffer.from(normalized));
+    return constantTimeEquals(Buffer.from(expectedBase64), Buffer.from(normalized));
   });
 }
 
@@ -1876,6 +2147,20 @@ function recordPolarPurchase(email: string, productId?: string, eventId?: string
   return existing;
 }
 
+function recordPolarSubscriptionEnded(email: string, eventId?: string) {
+  const store = readAuthStore();
+  const key = normalizeEmail(email);
+  const existing = store.premiumByEmail[key];
+  if (!existing) return null;
+  if (eventId && existing.eventIds.includes(eventId)) return existing;
+  existing.subscriptionExpiresAt = new Date().toISOString();
+  if (existing.plan === 'monthly') existing.plan = 'unknown';
+  if (eventId) existing.eventIds.push(eventId);
+  existing.updatedAt = new Date().toISOString();
+  writeAuthStore(store);
+  return existing;
+}
+
 app.post('/api/polar/checkout', async (req: Request, res: Response) => {
   const session = getSessionFromRequest(req);
   if (!session) return res.status(401).json({ error: '로그인이 필요합니다.', code: 'LOGIN_REQUIRED' });
@@ -1929,7 +2214,9 @@ app.post('/api/polar/webhook', (req: Request, res: Response) => {
         ? req.body.event_type
         : '';
 
-  if (!['order.created', 'checkout.created', 'subscription.created', 'subscription.active'].includes(eventType)) {
+  const grantEvents = ['order.paid', 'subscription.active', 'subscription.renewed'];
+  const cancellationEvents = ['subscription.canceled', 'subscription.revoked'];
+  if (![...grantEvents, ...cancellationEvents].includes(eventType)) {
     return res.json({ ok: true, ignored: true });
   }
 
@@ -1938,7 +2225,10 @@ app.post('/api/polar/webhook', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Polar webhook에서 구매자 email을 찾지 못했습니다.', code: 'POLAR_EMAIL_MISSING' });
   }
 
-  const record = recordPolarPurchase(purchase.email, purchase.productId, purchase.eventId, purchase.expiresAt);
+  const record = cancellationEvents.includes(eventType)
+    ? recordPolarSubscriptionEnded(purchase.email, purchase.eventId)
+    : recordPolarPurchase(purchase.email, purchase.productId, purchase.eventId, purchase.expiresAt);
+  if (!record) return res.json({ ok: true, ignored: true });
   res.json({ ok: true, premium: getPremiumStatusForEmail(record.email) });
 });
 
@@ -2544,6 +2834,7 @@ app.post('/api/convert/pdf-to-hwp', requirePremium, upload.single('file'), async
 
   const missing: string[] = [];
   if (!commandAvailable(RHWP_INGEST_EXPORTER_PATH)) missing.push('rhwp-ingest-exporter');
+  if (!commandAvailable(PYTHON_PATH, ['-c', 'import fitz'])) missing.push('python3-pymupdf(PyMuPDF)');
   if (PDF_HWP_PRIMARY_PIPELINE === 'pdf2docx-docx') {
     if (!fs.existsSync(PDF2DOCX_SCRIPT_PATH)) missing.push('pdf_to_docx.py');
     if (!commandAvailable(PYTHON_PATH, ['-c', 'import pdf2docx'])) missing.push('pdf2docx');
@@ -2568,8 +2859,9 @@ app.post('/api/convert/pdf-to-hwp', requirePremium, upload.single('file'), async
     const layoutXmlPath = path.join(jobDir, 'layout.xml');
     const ingestPath = path.join(jobDir, 'ingest.json');
     const outputPath = path.join(jobDir, 'output.hwp');
+    const outputFormat = 'hwp';
 
-    console.log(`[PDF→HWP] input=${inputPath} layout=${layoutXmlPath} ingest=${ingestPath} output=${outputPath}`);
+    console.log(`[PDF→HWP] input=${inputPath} layout=${layoutXmlPath} ingest=${ingestPath} output=${outputPath} format=${outputFormat}`);
 
     let ingest: PdfLayoutIngest | null = null;
 
@@ -2618,6 +2910,7 @@ app.post('/api/convert/pdf-to-hwp', requirePremium, upload.single('file'), async
         await createTextErasedPdfPageBackgrounds(ingest, jobDir);
       }
     }
+    mergePdfVectorBoxes(ingest, await extractPdfVectorBoxes(inputPath));
     fs.writeFileSync(ingestPath, JSON.stringify(ingest, null, 2), 'utf8');
 
     await execFileAsync(RHWP_INGEST_EXPORTER_PATH, [
@@ -2634,14 +2927,18 @@ app.post('/api/convert/pdf-to-hwp', requirePremium, upload.single('file'), async
       throw new Error('생성된 파일이 HWP5(OLE) 형식이 아닙니다.');
     }
 
+    const finalOutputPath = outputPath;
+    const finalFormat = 'hwp';
+    const finalResultFilename = req.file.originalname.replace(/\.pdf$/i, '.hwp');
+
     jobs.set(jobId, {
       id: jobId,
       status: 'completed',
       progress: 100,
       createdAt: Date.now(),
-      outputPath,
+      outputPath: finalOutputPath,
       originalName: req.file.originalname,
-      resultFilename: req.file.originalname.replace(/\.pdf$/i, '.hwp'),
+      resultFilename: finalResultFilename,
       deleteAt: Date.now() + 10 * 60 * 1000,
     });
     consumeOneTimePassForRequest(req);
@@ -2674,9 +2971,10 @@ app.get('/api/health', (_req: Request, res: Response) => {
     pdftoppm: commandAvailable(PDFTOPPM_PATH, ['-h']),
     imagemagick: commandAvailable(IMAGEMAGICK_PATH, ['-version']),
     pythonPillow: commandAvailable(PYTHON_PATH, ['-c', 'import PIL']),
+    pythonPyMuPDF: commandAvailable(PYTHON_PATH, ['-c', 'import fitz']),
     pdf2docx: commandAvailable(PYTHON_PATH, ['-c', 'import pdf2docx']),
     pdf2docxScript: fs.existsSync(PDF2DOCX_SCRIPT_PATH),
-    pdf2docxMode: PDF2DOCX_MODE,
+    pdf2docxMode: PDF2DOCX_LAYOUT_MODE,
     pdfToHwpPrimaryPipeline: PDF_HWP_PRIMARY_PIPELINE,
   });
 });
@@ -2692,9 +2990,10 @@ app.listen(PORT, () => {
   console.log(`  pdftoppm: ${PDFTOPPM_PATH} (${commandAvailable(PDFTOPPM_PATH, ['-h']) ? 'OK' : 'MISSING'})`);
   console.log(`  imagemagick: ${IMAGEMAGICK_PATH} (${commandAvailable(IMAGEMAGICK_PATH, ['-version']) ? 'OK' : 'MISSING'})`);
   console.log(`  python-pillow: ${PYTHON_PATH} (${commandAvailable(PYTHON_PATH, ['-c', 'import PIL']) ? 'OK' : 'MISSING'})`);
+  console.log(`  python-pymupdf: ${PYTHON_PATH} (${commandAvailable(PYTHON_PATH, ['-c', 'import fitz']) ? 'OK' : 'MISSING'})`);
   console.log(`  pdf2docx: ${PYTHON_PATH} (${commandAvailable(PYTHON_PATH, ['-c', 'import pdf2docx']) ? 'OK' : 'MISSING'})`);
   console.log(`  pdf2docx-script: ${PDF2DOCX_SCRIPT_PATH} (${fs.existsSync(PDF2DOCX_SCRIPT_PATH) ? 'OK' : 'MISSING'})`);
-  console.log(`  PDF→DOCX mode: ${PDF2DOCX_MODE}`);
+  console.log(`  PDF→DOCX mode: ${PDF2DOCX_LAYOUT_MODE}`);
   console.log(`  PDF→HWP primary pipeline: ${PDF_HWP_PRIMARY_PIPELINE}`);
   console.log(`  qpdf: ${QPDF_PATH} (${commandAvailable(QPDF_PATH) ? 'OK' : 'MISSING'})`);
   console.log(`  Ghostscript: ${GHOSTSCRIPT_PATH} (${commandAvailable(GHOSTSCRIPT_PATH, ['--version']) ? 'OK' : 'MISSING'})`);

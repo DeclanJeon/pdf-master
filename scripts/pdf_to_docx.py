@@ -7,6 +7,7 @@
 3. 표: Y/X 경계로 행높이/열너비, clip으로 셀 내용 추출
 """
 import argparse, io, os, sys, logging
+from pdf2docx import Converter
 
 try:
     import fitz
@@ -16,6 +17,7 @@ except ImportError:
 try:
     from docx import Document
     from docx.shared import Pt, Mm
+    from docx.enum.section import WD_SECTION
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.enum.table import WD_TABLE_ALIGNMENT
     from docx.oxml.ns import qn, nsdecls
@@ -243,11 +245,9 @@ def _add_anchored_image_to_para(doc, para, img_el, doc_pr_counter):
     drawing.replace(inline, anchor_el)
 
 
-def build_docx(page_data: dict, mode: str) -> bytes:
-    doc = Document()
-    section = doc.sections[0]
+def _configure_section(section, page_data: dict):
     pw_pt = page_data["width"]; ph_pt = page_data["height"]
-    margin_mm = DEFAULT_MARGIN_MM; margin_pt = margin_mm * MM_TO_PT
+    margin_mm = DEFAULT_MARGIN_MM
     section.page_width = Mm(pw_pt * PT_TO_MM)
     section.page_height = Mm(ph_pt * PT_TO_MM)
     section.top_margin = Mm(margin_mm)
@@ -255,7 +255,14 @@ def build_docx(page_data: dict, mode: str) -> bytes:
     section.left_margin = Mm(margin_mm)
     section.right_margin = Mm(margin_mm)
 
-    table_top = page_data["tables"][0]["bbox"][1] if page_data["tables"] else ph_pt
+
+def _append_page(doc: Document, page_data: dict, mode: str, is_first_page: bool, doc_pr_counter: list):
+    section = doc.sections[0] if is_first_page else doc.add_section(WD_SECTION.NEW_PAGE)
+    _configure_section(section, page_data)
+
+    margin_pt = DEFAULT_MARGIN_MM * MM_TO_PT
+
+    table_top = page_data["tables"][0]["bbox"][1] if page_data["tables"] else page_data["height"]
 
     # ── 1. 빈 문단에 모든 anchor 이미지 삽입 (behindDoc=1) ──
     anchor_para = doc.add_paragraph()
@@ -263,7 +270,6 @@ def build_docx(page_data: dict, mode: str) -> bytes:
     anchor_para.paragraph_format.space_after = Pt(0)
     anchor_para.paragraph_format.line_spacing = Pt(0.1)
 
-    doc_pr_counter = [1]
     for img_el in page_data["images"]:
         _add_anchored_image_to_para(doc, anchor_para, img_el, doc_pr_counter)
 
@@ -328,8 +334,56 @@ def build_docx(page_data: dict, mode: str) -> bytes:
             p._element.get_or_add_pPr().append(shd)
         cursor_y = txt_y + tel["size"]
 
+
+def build_docx(page_data: dict, mode: str) -> bytes:
+    doc = Document()
+    _append_page(doc, page_data, mode, True, [1])
+
     buf = io.BytesIO(); doc.save(buf)
     return buf.getvalue()
+
+
+def create_absolute_layout_docx(pdf_doc, page_index: int = 0) -> bytes:
+    page = pdf_doc[page_index]
+    page_data = analyze_page(page, "absolute")
+    return build_docx(page_data, "editable")
+
+
+def create_layout_docx(pdf_doc, mode: str, start: int, end: int) -> bytes:
+    page_count = len(pdf_doc)
+    if page_count == 0:
+        raise ValueError("PDF에 페이지가 없습니다")
+    first = max(0, start)
+    last = page_count - 1 if end < 0 else min(end, page_count - 1)
+    if first > last:
+        raise ValueError("변환할 PDF 페이지 범위가 올바르지 않습니다")
+
+    doc = Document()
+    doc_pr_counter = [1]
+    for page_index in range(first, last + 1):
+        page_mode = "absolute" if mode == "absolute" else mode
+        output_mode = "editable" if mode == "absolute" else mode
+        page_data = analyze_page(pdf_doc[page_index], page_mode)
+        _append_page(doc, page_data, output_mode, page_index == first, doc_pr_counter)
+
+    buf = io.BytesIO(); doc.save(buf)
+    return buf.getvalue()
+
+
+def create_faithful_docx_with_pdf2docx(input_path: str, output_path: str, start: int, end: int):
+    cv = Converter(input_path)
+    try:
+        cv.convert(
+            output_path,
+            start=start,
+            end=None if end < 0 else end,
+            page_margin_factor_top=0.0,
+            float_image_ignorable_gap=0.0,
+            clip_image_res_ratio=6.0,
+            extract_stream_table=True,
+        )
+    finally:
+        cv.close()
 
 
 def _add_table(doc: Document, tinfo: dict):
@@ -420,7 +474,8 @@ def _set_cell_margins(cell, top=10, bottom=10, start=30, end=30):
 def main():
     parser = argparse.ArgumentParser(description="PDF → DOCX 변환")
     parser.add_argument("input"); parser.add_argument("output")
-    parser.add_argument("--mode", choices=["faithful", "editable"], default="faithful")
+    parser.add_argument("--layout-mode", choices=["faithful", "editable", "absolute"], default=None)
+    parser.add_argument("--mode", choices=["faithful", "editable", "absolute"], default=None)
     parser.add_argument("--start", type=int, default=0)
     parser.add_argument("--end", type=int, default=-1)
     parser.add_argument("--margin", type=float, default=DEFAULT_MARGIN_MM)
@@ -434,19 +489,20 @@ def main():
     except Exception as e:
         print(f"PDF 열기 실패: {e}", file=sys.stderr); sys.exit(3)
 
-    end = args.end if args.end >= 0 else len(pdf_doc) - 1
-    log.info(f"변환 시작: {args.input} → {args.output} (모드={args.mode})")
-
-    page = pdf_doc[args.start]
-    page_data = analyze_page(page, args.mode)
-    docx_bytes = build_docx(page_data, args.mode)
-
+    mode = args.layout_mode or args.mode or "faithful"
+    log.info(f"변환 시작: {args.input} → {args.output} (모드={mode})")
     out_dir = os.path.dirname(os.path.abspath(args.output))
     os.makedirs(out_dir, exist_ok=True)
-    with open(args.output, "wb") as f:
-        f.write(docx_bytes)
 
-    pdf_doc.close()
+    if mode == "faithful":
+        pdf_doc.close()
+        create_faithful_docx_with_pdf2docx(args.input, args.output, args.start, args.end)
+    else:
+        docx_bytes = create_layout_docx(pdf_doc, mode, args.start, args.end)
+        with open(args.output, "wb") as f:
+            f.write(docx_bytes)
+        pdf_doc.close()
+
     log.info(f"변환 완료: {args.output}")
     print(args.output)
 

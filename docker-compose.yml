@@ -2,18 +2,51 @@ services:
   web:
     build: .
     ports:
-      - "3001:3001"
+      - "${PORT:-3001}:3001"
     environment:
-      - PORT=3001
-      - NODE_ENV=production
-      - TOSS_SECRET_KEY=${TOSS_SECRET_KEY}
-      - TOSS_CLIENT_KEY=${TOSS_CLIENT_KEY}
-      - HWPFORGE_PATH=/app/bin/hwpforge
-      - SOFFICE_PATH=soffice
-      - MD2HTML_PATH=/app/scripts/md2html.py
+      PORT: ${PORT:-3001}
+      NODE_ENV: production
+
+      # Runtime document-processing binaries (WORK-03, WORK-06)
+      HWPFORGE_PATH: /app/bin/hwpforge
+      SOFFICE_PATH: soffice
+      HWPX2HTML_PATH: /app/server/hwpx2html.py
+      MD2HTML_PATH: /app/scripts/md2html.py
+      RHWP_PATH: rhwp
+      PDFTOTEXT_PATH: pdftotext
+      QPDF_PATH: qpdf
+      GHOSTSCRIPT_PATH: gs
+
+      # Google OAuth/session config expected by WORK-01 server implementation
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3001}
+      APP_URL: ${APP_URL:-http://localhost:3001}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3001/api/auth/callback}
+      SESSION_SECRET: ${SESSION_SECRET:-change-me-in-production}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-pdfm_session}
+      SESSION_TTL_MS: ${SESSION_TTL_MS:-2592000000}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      AUTH_STORE_PATH: ${AUTH_STORE_PATH:-/app/data/auth-store.json}
+
+      # Polar.sh checkout/webhook config expected by WORK-02/WORK-03 payment flow
+      POLAR_ACCESS_TOKEN: ${POLAR_ACCESS_TOKEN:-}
+      POLAR_WEBHOOK_SECRET: ${POLAR_WEBHOOK_SECRET:-}
+      POLAR_ONE_TIME_PRODUCT_ID: ${POLAR_ONE_TIME_PRODUCT_ID:-}
+      POLAR_MONTHLY_PRODUCT_ID: ${POLAR_MONTHLY_PRODUCT_ID:-}
+      POLAR_CHECKOUT_SUCCESS_URL: ${POLAR_CHECKOUT_SUCCESS_URL:-http://localhost:5173/pricing?success=true}
+      POLAR_CHECKOUT_CANCEL_URL: ${POLAR_CHECKOUT_CANCEL_URL:-http://localhost:5173/pricing?canceled=true}
+
+      # Admin/operations config for WORK-14
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      ADMIN_AUDIT_LOG_PATH: ${ADMIN_AUDIT_LOG_PATH:-/app/data/admin-audit.log}
     volumes:
       - hwpforge-bin:/app/bin
+      - pdfmaster-data:/app/data
     restart: unless-stopped
 
 volumes:
   hwpforge-bin:
+  pdfmaster-data:
