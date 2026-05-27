@@ -5,6 +5,7 @@ import { Footer } from '@/components/layout/Footer'
 import { HomePage } from '@/components/layout/HomePage'
 import { ToolPage } from '@/components/tools/ToolPage'
 import PaymentPage from '@/components/tools/PaymentPage'
+import AdminPage from '@/components/tools/AdminPage'
 
 export default function App() {
   return (
@@ -16,6 +17,7 @@ export default function App() {
             <Route path="/" element={<HomePage />} />
             <Route path="/tool/:toolId" element={<ToolPage />} />
             <Route path="/pricing" element={<PaymentPage />} />
+            <Route path="/admin" element={<AdminPage />} />
           </Routes>
         </main>
         <Footer />

@@ -13,12 +13,21 @@ export const tools: ToolInfo[] = [
   },
   {
     id: 'pdf-to-hwp',
-    name: 'PDF → 한글(HWP) 변환',
-    description: 'PDF를 한글 문서로 변환합니다.',
+    name: 'PDF → HWP 변환',
+    description: 'PDF를 한글에서 편집 가능한 HWP 문서로 변환합니다.',
     icon: 'FileUp',
     category: 'convert' as ToolCategory,
     isPremium: true,
     isKoreaSpecific: true,
+  },
+  {
+    id: 'pdf-to-docx',
+    name: 'PDF → Word(DOCX) 변환',
+    description: 'PDF를 Word에서 편집 가능한 DOCX 문서로 변환합니다. 텍스트와 표 구조 보존을 우선합니다.',
+    icon: 'FileText',
+    category: 'convert' as ToolCategory,
+    isPremium: false,
+    isKoreaSpecific: false,
   },
   {
     id: 'pdf-merge',
@@ -118,8 +127,8 @@ export const tools: ToolInfo[] = [
   // 서명 (Sign)
   {
     id: 'pdf-sign',
-    name: '전자서명',
-    description: 'PDF에 전자서명을 추가합니다. 전자서명법에 따른 법적 효력.',
+    name: '서명 이미지 삽입',
+    description: 'PDF에 손글씨 서명 이미지를 삽입합니다. 인증서 기반 법적 전자서명은 아닙니다.',
     icon: 'PenTool',
     category: 'sign' as ToolCategory,
     isPremium: true,

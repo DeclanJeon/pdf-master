@@ -10,6 +10,11 @@ import { toast } from 'sonner'
 
 type Step = 'upload' | 'preview' | 'processing' | 'done'
 
+const toBlobPart = (bytes: Uint8Array): BlobPart =>
+  bytes.buffer instanceof ArrayBuffer
+    ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+    : new Uint8Array(bytes).buffer
+
 export function MaskingTool() {
   const [step, setStep] = useState<Step>('upload')
   const [file, setFile] = useState<File | null>(null)
@@ -81,7 +86,7 @@ export function MaskingTool() {
 
   const handleDownload = () => {
     if (!resultBytes || !file) return
-    const blob = new Blob([resultBytes], { type: 'application/pdf' })
+    const blob = new Blob([toBlobPart(resultBytes)], { type: 'application/pdf' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -128,7 +133,7 @@ export function MaskingTool() {
         </div>
 
         <p className="mt-4 text-xs text-center text-muted-foreground">
-          🔒 파일은 브라우저에서만 처리됩니다. 서버로 전송되지 않습니다.
+          🔒 이 마스킹 도구는 브라우저에서 처리됩니다. HWP 변환·암호 기능 등 일부 도구는 서버 처리를 사용합니다.
         </p>
       </div>
     )
@@ -160,7 +165,7 @@ export function MaskingTool() {
                       }, {} as Record<string, number>)
                     ).map(([type, count]) => (
                       <Badge key={type} className={`${typeColors[type as PersonalInfoType]} text-white`}>
-                        {typeLabels[type as PersonalInfoType]} {count}건
+                        {typeLabels[type as PersonalInfoType]} {String(count)}건
                       </Badge>
                     ))}
                   </div>
@@ -201,7 +206,7 @@ export function MaskingTool() {
               ['maskEmail', '이메일', true],
               ['maskAccount', '계좌번호', false],
               ['maskCard', '신용카드번호', false],
-            ] as const).map(([key, label, defaultVal]) => (
+            ] as const).map(([key, label]) => (
               <div key={key} className="flex items-center justify-between">
                 <Label htmlFor={key}>{label}</Label>
                 <Switch

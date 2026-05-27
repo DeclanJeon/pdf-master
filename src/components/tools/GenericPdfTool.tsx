@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react'
+import { useState } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Upload, Download, CheckCircle, Loader2, FileText, Droplets, Grid3X3 } from 'lucide-react'
+import JSZip from 'jszip'
+import { Upload, Download, CheckCircle, Loader2, FileText, Droplets, Eye, EyeOff, Lock } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -18,9 +19,23 @@ import {
   encryptPdf,
   unlockPdf,
   renderWatermarkPreviewUrl,
+  type CompressPreset,
 } from '@/services/pdfUtils'
 
 type Step = 'upload' | 'config' | 'processing' | 'done'
+type SplitMode = 'count' | 'range'
+type ImageFormat = 'png' | 'jpeg'
+
+interface ProcessOptions {
+  watermark?: { text: string; opacity: number; size: number; isTile: boolean }
+  password?: string
+  compressPreset?: CompressPreset
+}
+
+type ZipWriter = {
+  file: (path: string, data: Blob | Uint8Array) => void
+  generateAsync: (options: { type: 'blob' }) => Promise<Blob>
+}
 
 interface ToolConfig {
   acceptMultiple: boolean
@@ -38,6 +53,7 @@ const toolConfigs: Record<string, ToolConfig> = {
   'pdf-unlock': { acceptMultiple: false, additionalOptions: ['password'] },
   'hwp-to-pdf': { acceptMultiple: false, additionalOptions: [] },
   'pdf-to-hwp': { acceptMultiple: false },
+  'pdf-to-docx': { acceptMultiple: false },
   'pdf-sign': { acceptMultiple: false },
 }
 
@@ -53,27 +69,84 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
   const [watermarkSize, setWatermarkSize] = useState(48)
   const [isTile, setIsTile] = useState(false)
 
+  // 분할 / 이미지 변환 설정
+  const [splitMode, setSplitMode] = useState<SplitMode>('count')
+  const [splitCount, setSplitCount] = useState('2')
+  const [splitRange, setSplitRange] = useState('1-3, 5, 8-10')
+  const [imageFormat, setImageFormat] = useState<ImageFormat>('png')
+  const [imageScale, setImageScale] = useState('2')
+  const [compressPreset, setCompressPreset] = useState<CompressPreset>('ebook')
+
+  // 암호 설정/해제 UI
+  const [password, setPassword] = useState('')
+  const [passwordConfirm, setPasswordConfirm] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+
   const config = toolConfigs[toolId] || { acceptMultiple: false }
 
-  const onDrop = useCallback(async (acceptedFiles: File[]) => {
+  const onDrop = async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return
     setFiles(acceptedFiles)
 
-    // 워터마크는 config 단계로, 나머지는 바로 처리
-    if (toolId === 'pdf-watermark') {
-      setWatermarkText('')  // 초기화
+    // 추가 옵션이 필요한 도구는 config 단계로, 나머지는 바로 처리
+    if (['pdf-watermark', 'pdf-split', 'pdf-to-image', 'pdf-compress', 'pdf-encrypt', 'pdf-unlock'].includes(toolId)) {
+      setWatermarkText('')
+      setPassword('')
+      setPasswordConfirm('')
+      setShowPassword(false)
       setStep('config')
       return
     }
     processFiles(acceptedFiles)
-  }, [toolId])
+  }
 
-  const processFiles = async (acceptedFiles: File[], watermarkOpts?: { text: string; opacity: number; size: number; isTile: boolean }) => {
+  const toBlobPart = (bytes: Uint8Array): BlobPart =>
+    bytes.buffer instanceof ArrayBuffer
+      ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+      : new Uint8Array(bytes).buffer
+
+  const getBaseName = (name: string) => name.replace(/\.[^/.]+$/, '')
+
+  const getPasswordStrength = (value: string) => {
+    let score = 0
+    if (value.length >= 8) score += 1
+    if (value.length >= 12) score += 1
+    if (/[A-Z]/.test(value) && /[a-z]/.test(value)) score += 1
+    if (/\d/.test(value)) score += 1
+    if (/[^A-Za-z0-9]/.test(value)) score += 1
+
+    if (!value) return { label: '입력 전', className: 'text-muted-foreground', width: '0%' }
+    if (score <= 2) return { label: '약함', className: 'text-red-600', width: '33%' }
+    if (score <= 4) return { label: '보통', className: 'text-amber-600', width: '66%' }
+    return { label: '강함', className: 'text-green-600', width: '100%' }
+  }
+
+  const validateSplitOptions = () => {
+    if (splitMode === 'count') {
+      const count = Number(splitCount)
+      if (!Number.isInteger(count) || count < 2 || count > 50) {
+        toast.error('분할 수는 2~50 사이의 정수로 입력해주세요.')
+        return null
+      }
+      return count
+    }
+
+    const normalized = splitRange.trim()
+    if (!/^\s*\d+\s*(?:-\s*\d+\s*)?(?:,\s*\d+\s*(?:-\s*\d+\s*)?)*\s*$/.test(normalized)) {
+      toast.error('페이지 범위는 1-3, 5, 8-10 형식으로 입력해주세요.')
+      return null
+    }
+    return normalized
+  }
+
+  const createZip = (): ZipWriter => new JSZip() as unknown as ZipWriter
+
+  const processFiles = async (acceptedFiles: File[], options: ProcessOptions = {}) => {
     setStep('processing')
 
     try {
-      const pdfBytes = new Uint8Array(await acceptedFiles[0].arrayBuffer())
       let result: Uint8Array | Blob
+      let resultMime = 'application/pdf'
 
       switch (toolId) {
         case 'pdf-merge': {
@@ -82,19 +155,45 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
           break
         }
         case 'pdf-split': {
-          const splitResults = await splitPdf(acceptedFiles[0], 'count', 2)
-          result = new Blob([JSON.stringify(splitResults)], { type: 'application/zip' })
-          setResultName('split-result.pdf')
+          const splitValue = validateSplitOptions()
+          if (splitValue === null) { setStep('config'); return }
+
+          const splitResults = await splitPdf(acceptedFiles[0], splitMode, splitValue)
+          const zip = createZip()
+          const width = String(splitResults.length).length
+          splitResults.forEach((bytes, index) => {
+            zip.file(`split-${String(index + 1).padStart(width, '0')}.pdf`, bytes)
+          })
+          result = await zip.generateAsync({ type: 'blob' })
+          setResultName('split-result.zip')
           break
         }
         case 'pdf-to-image': {
-          const images = await pdfToImages(acceptedFiles[0])
-          result = images[0] || new Blob()
-          setResultName('page-1.png')
+          const scale = Number(imageScale)
+          if (![1, 1.5, 2].includes(scale)) {
+            toast.error('해상도는 1x, 1.5x, 2x 중 하나를 선택해주세요.')
+            setStep('config')
+            return
+          }
+
+          const images = await pdfToImages(acceptedFiles[0], undefined, {
+            format: imageFormat,
+            scale,
+            quality: imageFormat === 'jpeg' ? 0.9 : undefined,
+          })
+          const zip = createZip()
+          const extension = imageFormat === 'jpeg' ? 'jpg' : 'png'
+          const width = String(images.length).length
+          await Promise.all(images.map(async (url, index) => {
+            const imageBlob = await fetch(url).then((response) => response.blob())
+            zip.file(`page-${String(index + 1).padStart(width, '0')}.${extension}`, imageBlob)
+          }))
+          result = await zip.generateAsync({ type: 'blob' })
+          setResultName(`${getBaseName(acceptedFiles[0].name)}-images.zip`)
           break
         }
         case 'pdf-watermark': {
-          const opts = watermarkOpts || { text: 'PDF마스터', opacity: 0.15, size: 48, isTile: false }
+          const opts = options.watermark || { text: 'PDF마스터', opacity: 0.15, size: 48, isTile: false }
           result = await addWatermark(acceptedFiles[0], opts.text, {
             opacity: opts.opacity,
             size: opts.size,
@@ -109,41 +208,69 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
           break
         }
         case 'pdf-compress': {
-          result = await compressPdf(acceptedFiles[0])
+          result = await compressPdf(acceptedFiles[0], options.compressPreset || compressPreset)
           setResultName(acceptedFiles[0].name.replace('.pdf', '_compressed.pdf'))
           break
         }
         case 'pdf-encrypt': {
-          const password = prompt('PDF 비밀번호를 입력하세요:')
-          if (!password) { setStep('upload'); return }
-          result = await encryptPdf(acceptedFiles[0], password)
+          if (!options.password) { setStep('config'); return }
+          result = await encryptPdf(acceptedFiles[0], options.password)
           setResultName(acceptedFiles[0].name.replace('.pdf', '_encrypted.pdf'))
           break
         }
         case 'pdf-unlock': {
-          const password = prompt('PDF 비밀번호를 입력하세요:')
-          if (!password) { setStep('upload'); return }
-          result = await unlockPdf(acceptedFiles[0], password)
+          if (!options.password) { setStep('config'); return }
+          result = await unlockPdf(acceptedFiles[0], options.password)
           setResultName(acceptedFiles[0].name.replace('.pdf', '_unlocked.pdf'))
           break
         }
         case 'pdf-to-hwp': {
+          toast.info('PDF를 한글 HWP 문서로 변환합니다. 한글에서 열어 편집할 수 있습니다.')
           const formData = new FormData()
           formData.append('file', acceptedFiles[0])
-          const res = await fetch('/api/convert/pdf-to-odt', { method: 'POST', body: formData })
+          const res = await fetch('/api/convert/pdf-to-hwp', {
+            method: 'POST',
+            body: formData,
+            credentials: 'same-origin',
+          })
           if (!res.ok) {
             const err = await res.json().catch(() => ({ error: '변환 실패' }))
-            throw new Error(err.error || 'ODT 변환 실패')
+            if (res.status === 403 && err.code === 'PREMIUM_REQUIRED') {
+              toast.error('프리미엄 기능입니다. 결제 페이지로 이동합니다.')
+              window.setTimeout(() => { window.location.href = '/pricing' }, 800)
+            }
+            throw new Error(err.error || 'HWP 변환 실패')
           }
           const { jobId } = await res.json()
           const dlRes = await fetch(`/api/download/${jobId}`)
-          if (!dlRes.ok) throw new Error('ODT 다운로드 실패')
+          if (!dlRes.ok) throw new Error('HWP 다운로드 실패')
           result = await dlRes.blob()
-          setResultName(acceptedFiles[0].name.replace('.pdf', '.odt'))
+          setResultName(acceptedFiles[0].name.replace('.pdf', '.hwp'))
+          break
+        }
+        case 'pdf-to-docx': {
+          toast.info('PDF를 Word에서 편집 가능한 DOCX 문서로 변환합니다.')
+          const formData = new FormData()
+          formData.append('file', acceptedFiles[0])
+          const res = await fetch('/api/convert/pdf-to-docx', {
+            method: 'POST',
+            body: formData,
+            credentials: 'same-origin',
+          })
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({ error: 'DOCX 변환 실패' }))
+            throw new Error(err.error || 'DOCX 변환 실패')
+          }
+          const { jobId } = await res.json()
+          const dlRes = await fetch(`/api/download/${jobId}`)
+          if (!dlRes.ok) throw new Error('DOCX 다운로드 실패')
+          result = await dlRes.blob()
+          resultMime = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+          setResultName(acceptedFiles[0].name.replace('.pdf', '.docx'))
           break
         }
         case 'pdf-sign': {
-          toast.info('서명 기능은 전자서명 페이지에서 진행해주세요.')
+          toast.info('서명 이미지 삽입 도구에서 진행해주세요.')
           setStep('upload')
           return
         }
@@ -153,13 +280,17 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
           return
       }
 
-      const blob = result instanceof Blob ? result : new Blob([result], { type: 'application/pdf' })
+      const blob = result instanceof Blob ? result : new Blob([toBlobPart(result)], { type: resultMime })
       setResultBlob(blob)
       setStep('done')
       toast.success('처리가 완료되었습니다.')
     } catch (e) {
       console.error(e)
-      toast.error('처리 중 오류가 발생했습니다.')
+      const message = e instanceof Error ? e.message : '처리 중 오류가 발생했습니다.'
+      toast.error(message)
+      if (message.includes('프리미엄 기능')) {
+        window.setTimeout(() => { window.location.href = '/pricing' }, 800)
+      }
       setStep('upload')
     }
   }
@@ -170,11 +301,41 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
       return
     }
     processFiles(files, {
-      text: watermarkText.trim(),
-      opacity: watermarkOpacity,
-      size: watermarkSize,
-      isTile,
+      watermark: {
+        text: watermarkText.trim(),
+        opacity: watermarkOpacity,
+        size: watermarkSize,
+        isTile,
+      },
     })
+  }
+
+  const handleStartSplit = () => {
+    if (validateSplitOptions() === null) return
+    processFiles(files)
+  }
+
+  const handleStartImageConversion = () => {
+    processFiles(files)
+  }
+
+  const handleStartCompress = () => {
+    processFiles(files, { compressPreset })
+  }
+
+  const handleStartPassword = () => {
+    const trimmedPassword = password.trim()
+    if (!trimmedPassword) {
+      toast.error('비밀번호를 입력해주세요.')
+      return
+    }
+
+    if (toolId === 'pdf-encrypt' && trimmedPassword !== passwordConfirm.trim()) {
+      toast.error('비밀번호 확인이 일치하지 않습니다.')
+      return
+    }
+
+    processFiles(files, { password: trimmedPassword })
   }
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -202,6 +363,275 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
     setResultBlob(null)
     setResultName('')
     setWatermarkText('')
+    setPassword('')
+    setPasswordConfirm('')
+    setShowPassword(false)
+  }
+
+  // ============================================================
+  // PDF 분할 설정 UI
+  // ============================================================
+  if (step === 'config' && toolId === 'pdf-split') {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-2">
+          <CheckCircle className="h-5 w-5 text-green-600" />
+          <span className="font-medium">{files[0]?.name}</span>
+        </div>
+
+        <div className="rounded-lg border p-4 space-y-4">
+          <Label className="text-base font-semibold">분할 방식</Label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <button
+              type="button"
+              onClick={() => setSplitMode('count')}
+              className={`rounded-lg border p-4 text-left transition-colors ${splitMode === 'count' ? 'border-red-500 bg-red-50' : 'hover:border-red-200'}`}
+            >
+              <div className="font-medium">N등분</div>
+              <p className="text-sm text-muted-foreground mt-1">PDF를 지정한 개수로 균등하게 나눕니다.</p>
+            </button>
+            <button
+              type="button"
+              onClick={() => setSplitMode('range')}
+              className={`rounded-lg border p-4 text-left transition-colors ${splitMode === 'range' ? 'border-red-500 bg-red-50' : 'hover:border-red-200'}`}
+            >
+              <div className="font-medium">페이지 범위</div>
+              <p className="text-sm text-muted-foreground mt-1">예: 1-3, 5, 8-10 형태로 묶음을 만듭니다.</p>
+            </button>
+          </div>
+        </div>
+
+        {splitMode === 'count' ? (
+          <div>
+            <Label htmlFor="split-count" className="text-base font-semibold">분할 수 (2~50)</Label>
+            <Input
+              id="split-count"
+              type="number"
+              min={2}
+              max={50}
+              value={splitCount}
+              onChange={(e) => setSplitCount(e.target.value)}
+              className="mt-2"
+            />
+          </div>
+        ) : (
+          <div>
+            <Label htmlFor="split-range" className="text-base font-semibold">페이지 범위</Label>
+            <Input
+              id="split-range"
+              value={splitRange}
+              onChange={(e) => setSplitRange(e.target.value)}
+              placeholder="1-3, 5, 8-10"
+              className="mt-2"
+            />
+            <p className="text-xs text-muted-foreground mt-1">
+              각 콤마 구간이 별도 PDF로 생성되어 ZIP에 담깁니다. 범위는 실제 페이지 수 안에서 검증됩니다.
+            </p>
+          </div>
+        )}
+
+        <div className="flex gap-3">
+          <Button variant="outline" onClick={handleReset}>다시 선택</Button>
+          <Button onClick={handleStartSplit} className="bg-red-600 hover:bg-red-700 flex-1">
+            PDF 분할 ZIP 만들기
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  // ============================================================
+  // PDF → 이미지 설정 UI
+  // ============================================================
+  if (step === 'config' && toolId === 'pdf-to-image') {
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-2">
+          <CheckCircle className="h-5 w-5 text-green-600" />
+          <span className="font-medium">{files[0]?.name}</span>
+        </div>
+
+        <div className="rounded-lg border p-4 space-y-3">
+          <Label className="text-base font-semibold">이미지 포맷</Label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {(['png', 'jpeg'] as ImageFormat[]).map((format) => (
+              <button
+                key={format}
+                type="button"
+                onClick={() => setImageFormat(format)}
+                className={`rounded-lg border p-4 text-left uppercase transition-colors ${imageFormat === format ? 'border-red-500 bg-red-50' : 'hover:border-red-200'}`}
+              >
+                <div className="font-medium">{format === 'png' ? 'PNG' : 'JPEG'}</div>
+                <p className="text-sm text-muted-foreground mt-1">
+                  {format === 'png' ? '선명한 무손실 이미지' : '용량이 작은 압축 이미지'}
+                </p>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-lg border p-4 space-y-3">
+          <Label className="text-base font-semibold">해상도</Label>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {['1', '1.5', '2'].map((scale) => (
+              <button
+                key={scale}
+                type="button"
+                onClick={() => setImageScale(scale)}
+                className={`rounded-lg border p-3 text-center transition-colors ${imageScale === scale ? 'border-red-500 bg-red-50' : 'hover:border-red-200'}`}
+              >
+                {scale}x
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">높을수록 선명하지만 ZIP 용량과 처리 시간이 증가합니다.</p>
+        </div>
+
+        <div className="flex gap-3">
+          <Button variant="outline" onClick={handleReset}>다시 선택</Button>
+          <Button onClick={handleStartImageConversion} className="bg-red-600 hover:bg-red-700 flex-1">
+            전체 페이지 이미지 ZIP 만들기
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  // ============================================================
+  // PDF 압축 설정 UI
+  // ============================================================
+  if (step === 'config' && toolId === 'pdf-compress') {
+    const presets: Array<{ id: CompressPreset; title: string; description: string }> = [
+      { id: 'screen', title: '강한 압축', description: '화면 공유용, 가장 작은 용량' },
+      { id: 'ebook', title: '권장', description: '품질과 용량의 균형' },
+      { id: 'printer', title: '인쇄', description: '인쇄 품질 우선' },
+      { id: 'prepress', title: '고품질', description: '출판/보관용' },
+    ]
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-2">
+          <CheckCircle className="h-5 w-5 text-green-600" />
+          <span className="font-medium">{files[0]?.name}</span>
+        </div>
+
+        <div className="rounded-lg border p-4 space-y-3">
+          <Label className="text-base font-semibold">압축 품질</Label>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {presets.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => setCompressPreset(preset.id)}
+                className={`rounded-lg border p-4 text-left transition-colors ${compressPreset === preset.id ? 'border-red-500 bg-red-50' : 'hover:border-red-200'}`}
+              >
+                <div className="font-medium">{preset.title}</div>
+                <p className="text-sm text-muted-foreground mt-1">{preset.description}</p>
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Ghostscript 서버 압축을 사용해 기존 래스터화 방식보다 텍스트/벡터 검색성을 보존합니다.
+          </p>
+        </div>
+
+        <div className="flex gap-3">
+          <Button variant="outline" onClick={handleReset}>다시 선택</Button>
+          <Button onClick={handleStartCompress} className="bg-red-600 hover:bg-red-700 flex-1">
+            PDF 압축
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  // ============================================================
+  // 암호 설정/해제 UI
+  // ============================================================
+  if (step === 'config' && (toolId === 'pdf-encrypt' || toolId === 'pdf-unlock')) {
+    const strength = getPasswordStrength(password)
+    const isEncrypt = toolId === 'pdf-encrypt'
+
+    return (
+      <div className="space-y-6">
+        <div className="flex items-center gap-2">
+          <CheckCircle className="h-5 w-5 text-green-600" />
+          <span className="font-medium">{files[0]?.name}</span>
+        </div>
+
+        <div className="rounded-xl border bg-white p-5 shadow-sm space-y-5">
+          <div className="flex items-start gap-3">
+            <div className="rounded-full bg-red-50 p-2">
+              <Lock className="h-5 w-5 text-red-600" />
+            </div>
+            <div>
+              <h3 className="font-semibold">{isEncrypt ? 'PDF 비밀번호 설정' : 'PDF 비밀번호 입력'}</h3>
+              <p className="text-sm text-muted-foreground mt-1">
+                {isEncrypt ? '다운로드할 암호화 PDF에 적용할 비밀번호를 입력하세요.' : '잠금 해제에 사용할 기존 PDF 비밀번호를 입력하세요.'}
+              </p>
+            </div>
+          </div>
+
+          <div>
+            <Label htmlFor="pdf-password">비밀번호</Label>
+            <div className="relative mt-2">
+              <Input
+                id="pdf-password"
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoFocus
+                className="pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((value) => !value)}
+                className="absolute inset-y-0 right-2 flex items-center text-muted-foreground hover:text-foreground"
+                aria-label={showPassword ? '비밀번호 숨기기' : '비밀번호 표시'}
+              >
+                {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
+          </div>
+
+          {isEncrypt && (
+            <div>
+              <Label htmlFor="pdf-password-confirm">비밀번호 확인</Label>
+              <Input
+                id="pdf-password-confirm"
+                type={showPassword ? 'text' : 'password'}
+                value={passwordConfirm}
+                onChange={(e) => setPasswordConfirm(e.target.value)}
+                className="mt-2"
+              />
+              {passwordConfirm && password !== passwordConfirm && (
+                <p className="text-xs text-red-600 mt-1">비밀번호가 일치하지 않습니다.</p>
+              )}
+            </div>
+          )}
+
+          <div>
+            <div className="flex justify-between text-xs mb-1">
+              <span className="text-muted-foreground">비밀번호 강도</span>
+              <span className={strength.className}>{strength.label}</span>
+            </div>
+            <div className="h-2 rounded-full bg-gray-100 overflow-hidden">
+              <div
+                className={`h-full transition-all ${strength.label === '강함' ? 'bg-green-500' : strength.label === '보통' ? 'bg-amber-500' : 'bg-red-500'}`}
+                style={{ width: strength.width }}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="flex gap-3">
+          <Button variant="outline" onClick={handleReset}>다시 선택</Button>
+          <Button onClick={handleStartPassword} className="bg-red-600 hover:bg-red-700 flex-1">
+            {isEncrypt ? '암호 설정' : '잠금 해제'}
+          </Button>
+        </div>
+      </div>
+    )
   }
 
   // ============================================================
@@ -353,7 +783,7 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
             </div>
 
             <p className="mt-4 text-xs text-center text-muted-foreground">
-              🔒 파일은 브라우저에서만 처리됩니다. 서버로 전송되지 않습니다.
+              🔒 이 도구는 기능에 따라 브라우저 처리 또는 서버 임시 변환을 사용합니다. 서버 처리 파일은 짧은 보관 시간 후 정리됩니다.
             </p>
           </>
         )}

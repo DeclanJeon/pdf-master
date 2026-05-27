@@ -22,7 +22,7 @@ export function HomePage() {
         <div className="container mx-auto px-4 text-center">
           <div className="inline-flex items-center gap-2 rounded-full bg-red-100 px-4 py-1.5 text-sm font-medium text-red-700 mb-6">
             <ShieldCheck className="h-4 w-4" />
-            서버 전송 없이 브라우저에서 처리
+            브라우저 처리 + 필요한 서버 변환 분리
           </div>
 
           <h1 className="text-4xl font-bold tracking-tight sm:text-5xl md:text-6xl">
@@ -35,7 +35,7 @@ export function HomePage() {
             한글(HWP) 변환, 도장 삽입, 주민번호 마스킹 —
             글로벌 도구가 못 하는 한국 특화 기능을 한 곳에.
             <br />
-            모든 처리는 브라우저에서. 파일은 서버로 전송되지 않습니다.
+            PDF 편집은 가능한 한 브라우저에서 처리하고, HWP 변환·암호 처리처럼 필요한 기능은 서버에서 안전하게 변환합니다.
           </p>
 
           <div className="mt-8 flex justify-center gap-4">
@@ -68,7 +68,7 @@ export function HomePage() {
             <FeatureCard
               icon={<FileText className="h-8 w-8 text-red-600" />}
               title="한글(HWP) PDF 변환"
-              description="Smallpdf, iLovePDF는 HWP를 지원하지 않습니다. 우리는 한국 문서 포맷을 완벽 지원합니다."
+              description="Smallpdf, iLovePDF는 HWP를 지원하지 않습니다. 우리는 한국 문서 포맷 변환을 지원하고 품질을 계속 개선합니다."
             />
             <FeatureCard
               icon={<Stamp className="h-8 w-8 text-red-600" />}
@@ -151,11 +151,11 @@ export function HomePage() {
       <section className="py-16 bg-white">
         <div className="container mx-auto px-4 text-center">
           <ShieldCheck className="mx-auto h-12 w-12 text-red-600 mb-4" />
-          <h2 className="text-2xl font-bold">파일은 서버로 전송되지 않습니다</h2>
+          <h2 className="text-2xl font-bold">처리 방식은 기능별로 명확히 안내합니다</h2>
           <p className="mx-auto mt-4 max-w-xl text-muted-foreground">
-            모든 PDF 처리는 여러분의 브라우저에서 수행됩니다.
-            파일이 외부 서버로 업로드되지 않으므로,
-            금융/법무 문서도 안전하게 처리할 수 있습니다.
+            마스킹·도장·서명 이미지 삽입 등은 브라우저에서 처리합니다.
+            HWP 변환, 암호 설정/해제 등 서버가 필요한 기능은 업로드 후 임시 처리하며,
+            결과 제공 후 짧은 보관 시간 내 정리됩니다.
           </p>
         </div>
       </section>

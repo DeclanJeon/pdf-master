@@ -1,10 +1,9 @@
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { Upload, FileText, Download, AlertCircle, Loader2, CheckCircle2, Info } from 'lucide-react';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { useAppStore } from '@/store/appStore';
 
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
@@ -20,12 +19,10 @@ export default function HwpToPdfTool() {
   const [step, setStep] = useState<Step>('upload');
   const [progress, setProgress] = useState(0);
   const [fileName, setFileName] = useState('');
-  const [jobId, setJobId] = useState('');
   const [downloadUrl, setDownloadUrl] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [usageRemaining, setUsageRemaining] = useState(3);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const { incrementUsageCount, usageCount } = useAppStore();
 
   // Fetch usage on mount
   useEffect(() => {
@@ -55,7 +52,6 @@ export default function HwpToPdfTool() {
         if (data.status === 'completed') {
           setDownloadUrl(`${API_BASE}${data.resultUrl}`);
           setStep('done');
-          incrementUsageCount();
           if (pollingRef.current) clearInterval(pollingRef.current);
         } else if (data.status === 'failed') {
           setErrorMsg(data.error || '변환 중 오류가 발생했습니다.');
@@ -103,14 +99,13 @@ export default function HwpToPdfTool() {
       }
 
       const data: ConversionResult = await res.json();
-      setJobId(data.jobId);
       setProgress(10);
       startPolling(data.jobId);
     } catch (err: any) {
       setErrorMsg(err.message || '업로드 중 오류가 발생했습니다.');
       setStep('error');
     }
-  }, [incrementUsageCount]);
+  }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -123,7 +118,6 @@ export default function HwpToPdfTool() {
     setStep('upload');
     setProgress(0);
     setFileName('');
-    setJobId('');
     setDownloadUrl('');
     setErrorMsg('');
     if (pollingRef.current) clearInterval(pollingRef.current);
@@ -239,12 +233,10 @@ export default function HwpToPdfTool() {
             </div>
 
             <div className="flex gap-3">
-              <Button asChild className="flex-1 bg-red-600 hover:bg-red-700">
-                <a href={downloadUrl} download="converted.pdf">
-                  <Download className="w-4 h-4 mr-2" />
-                  PDF 다운로드
-                </a>
-              </Button>
+              <a href={downloadUrl} download="converted.pdf" className={buttonVariants({ className: 'flex-1 bg-red-600 hover:bg-red-700' })}>
+                <Download className="w-4 h-4 mr-2" />
+                PDF 다운로드
+              </a>
               <Button variant="outline" onClick={handleReset}>
                 다른 파일 변환
               </Button>

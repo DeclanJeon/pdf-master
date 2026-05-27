@@ -16,6 +16,11 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@${pdfjsLib.v
 
 type Step = 'upload' | 'config' | 'processing' | 'done'
 
+const toBlobPart = (bytes: Uint8Array): BlobPart =>
+  bytes.buffer instanceof ArrayBuffer
+    ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+    : new Uint8Array(bytes).buffer
+
 export function StampTool() {
   const [step, setStep] = useState<Step>('upload')
   const [file, setFile] = useState<File | null>(null)
@@ -50,7 +55,7 @@ export function StampTool() {
     canvas.width = viewport.width
     canvas.height = viewport.height
     const ctx = canvas.getContext('2d')!
-    await page.render({ canvasContext: ctx, viewport }).promise
+    await page.render({ canvas, canvasContext: ctx, viewport }).promise
     setPageImage(canvas.toDataURL())
   }, [])
 
@@ -163,7 +168,7 @@ export function StampTool() {
       })
       return () => cancelAnimationFrame(rafId)
     }
-  }, [step, pageSize, stampScale])
+  }, [step, pageSize, stampScale, stampPos])
 
   const handleInsertStamp = async () => {
     if (!pdfBytes || stampPos === null || !customStampUrl) return
@@ -205,7 +210,7 @@ export function StampTool() {
 
   const handleDownload = () => {
     if (!resultBytes || !file) return
-    const blob = new Blob([resultBytes], { type: 'application/pdf' })
+    const blob = new Blob([toBlobPart(resultBytes)], { type: 'application/pdf' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url

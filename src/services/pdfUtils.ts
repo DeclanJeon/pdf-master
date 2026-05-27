@@ -7,6 +7,31 @@ import * as pdfjsLib from "pdfjs-dist";
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.mjs`;
 
 export type ProgressCallback = (current: number, total: number, message?: string) => void;
+export type PdfImageFormat = "png" | "jpeg";
+
+export interface PdfToImagesOptions {
+  format?: PdfImageFormat;
+  scale?: number;
+  quality?: number;
+}
+
+const getPasswordApiErrorMessage = async (
+  response: Response,
+  fallback: string
+): Promise<string> => {
+  if (response.status === 503) {
+    return "서버에 암호 처리 모듈이 설치되어 있지 않습니다";
+  }
+  if (response.status === 401) {
+    return "비밀번호가 틀렸습니다";
+  }
+
+  const err = await response.json().catch(() => ({ error: fallback }));
+  if (response.status === 403 && err.code === "PREMIUM_REQUIRED") {
+    return "프리미엄 기능입니다. 결제 페이지에서 로그인/결제를 완료해주세요.";
+  }
+  return err.error || fallback;
+};
 
 export const mergePdfs = async (
   files: File[],
@@ -110,7 +135,9 @@ export const splitPdf = async (
   if (mode === "count") {
     // Split into N parts
     const parts = Number(value);
-    if (parts < 2) throw new Error("Parts must be at least 2");
+    if (!Number.isInteger(parts) || parts < 2 || parts > 50) {
+      throw new Error("분할 수는 2~50 사이의 정수여야 합니다.");
+    }
 
     const pagesPerPart = Math.ceil(pageCount / parts);
 
@@ -128,23 +155,36 @@ export const splitPdf = async (
       resultPdfs.push(await newPdf.save());
     }
   } else {
-    // Range split (Simplified: Extract range to a single new PDF)
-    // e.g., "1-3" -> indices 0,1,2
+    // Range split: "1-3, 5, 8-10" -> one output PDF per comma segment.
     const rangeStr = String(value).trim();
-    // Simple parser for "start-end"
-    const [startStr, endStr] = rangeStr.split("-");
-    let start = parseInt(startStr) - 1;
-    let end = endStr ? parseInt(endStr) - 1 : start;
+    if (!rangeStr) throw new Error("페이지 범위를 입력해주세요.");
 
-    if (isNaN(start) || start < 0) start = 0;
-    if (isNaN(end) || end >= pageCount) end = pageCount - 1;
-    if (end < start) end = start;
+    const segments = rangeStr.split(",").map((segment) => segment.trim()).filter(Boolean);
+    if (segments.length === 0) throw new Error("페이지 범위를 입력해주세요.");
 
-    const newPdf = await PDFDocument.create();
-    const range = Array.from({ length: end - start + 1 }, (_, k) => start + k);
-    const copiedPages = await newPdf.copyPages(sourcePdf, range);
-    copiedPages.forEach((page) => newPdf.addPage(page));
-    resultPdfs.push(await newPdf.save());
+    for (let i = 0; i < segments.length; i++) {
+      const match = segments[i].match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+      if (!match) {
+        throw new Error("페이지 범위는 1-3, 5, 8-10 형식으로 입력해주세요.");
+      }
+
+      const startPage = Number(match[1]);
+      const endPage = match[2] ? Number(match[2]) : startPage;
+
+      if (startPage < 1 || endPage < 1 || startPage > pageCount || endPage > pageCount) {
+        throw new Error(`페이지 범위는 1~${pageCount} 사이여야 합니다.`);
+      }
+      if (endPage < startPage) {
+        throw new Error("페이지 범위의 끝 페이지는 시작 페이지보다 작을 수 없습니다.");
+      }
+
+      onProgress?.(i + 1, segments.length, `Creating range ${segments[i]}`);
+      const newPdf = await PDFDocument.create();
+      const range = Array.from({ length: endPage - startPage + 1 }, (_, k) => startPage - 1 + k);
+      const copiedPages = await newPdf.copyPages(sourcePdf, range);
+      copiedPages.forEach((page) => newPdf.addPage(page));
+      resultPdfs.push(await newPdf.save());
+    }
   }
 
   return resultPdfs;
@@ -186,8 +226,11 @@ export const imagesToPdf = async (
 
 export const pdfToImages = async (
   file: File,
-  onProgress?: ProgressCallback
+  onProgress?: ProgressCallback,
+  options: PdfToImagesOptions = {}
 ): Promise<string[]> => {
+  const { format = "jpeg", scale = 2.0, quality = 0.8 } = options;
+  const mimeType = format === "png" ? "image/png" : "image/jpeg";
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
   const pageCount = pdf.numPages;
@@ -196,7 +239,7 @@ export const pdfToImages = async (
   for (let i = 1; i <= pageCount; i++) {
     onProgress?.(i, pageCount, `Rendering page ${i} of ${pageCount}`);
     const page = await pdf.getPage(i);
-    const viewport = page.getViewport({ scale: 2.0 }); // High quality
+    const viewport = page.getViewport({ scale });
     const canvas = document.createElement("canvas");
     const context = canvas.getContext("2d");
 
@@ -205,8 +248,13 @@ export const pdfToImages = async (
     canvas.height = viewport.height;
     canvas.width = viewport.width;
 
-    await page.render({ canvasContext: context, viewport: viewport }).promise;
-    imageUrls.push(canvas.toDataURL("image/jpeg", 0.8));
+    if (format === "jpeg") {
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+    }
+
+    await page.render({ canvas, canvasContext: context, viewport: viewport }).promise;
+    imageUrls.push(format === "png" ? canvas.toDataURL(mimeType) : canvas.toDataURL(mimeType, quality));
   }
 
   return imageUrls;
@@ -251,7 +299,7 @@ export const renderPageAsImage = async (
   if (!context) return "";
   canvas.height = viewport.height;
   canvas.width = viewport.width;
-  await page.render({ canvasContext: context, viewport }).promise;
+  await page.render({ canvas, canvasContext: context, viewport }).promise;
   return canvas.toDataURL();
 };
 
@@ -312,51 +360,46 @@ export const extractTextFromPdf = async (
   return fullText;
 };
 
-// 1. PDF 압축 (Rasterize & Compress)
+export type CompressPreset = "screen" | "ebook" | "printer" | "prepress";
+
+const getServerPdfJobBlob = async (
+  response: Response,
+  fallback: string
+): Promise<{ blob: Blob; jobId: string }> => {
+  const data = await response.json().catch(() => null) as { jobId?: string; error?: string } | null;
+  if (!response.ok || !data?.jobId) {
+    throw new Error(data?.error || fallback);
+  }
+
+  const downloadResponse = await fetch(`/api/download/${data.jobId}`);
+  if (!downloadResponse.ok) {
+    const error = await downloadResponse.json().catch(() => ({ error: fallback }));
+    throw new Error(error.error || fallback);
+  }
+
+  return { blob: await downloadResponse.blob(), jobId: data.jobId };
+};
+
+// 1. PDF 압축 (Ghostscript 서버 압축: 텍스트/벡터 보존)
 export const compressPdf = async (
   file: File,
-  quality: number = 0.7,
+  preset: CompressPreset = "ebook",
   onProgress?: ProgressCallback
-): Promise<Uint8Array> => {
-  // 경고: 이 방식은 텍스트를 이미지로 변환(래스터화)하여 압축합니다. 텍스트 검색 기능이 사라질 수 있습니다.
-  const imageUrls = await pdfToImages(file, (current, total) => {
-    onProgress?.(Math.round(current / 2), total, `Rasterizing page ${current}/${total}`);
+): Promise<Blob> => {
+  onProgress?.(1, 3, "Uploading PDF to compression service");
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("preset", preset);
+
+  const response = await fetch("/api/compress", {
+    method: "POST",
+    body: formData,
   });
-  const pdfDoc = await PDFDocument.create();
-  const totalImages = imageUrls.length;
 
-  for (let i = 0; i < imageUrls.length; i++) {
-    const url = imageUrls[i];
-    onProgress?.(Math.round(totalImages / 2 + i / 2 + 1), totalImages, `Compressing image ${i + 1}/${totalImages}`);
-    // 캔버스에서 이미지를 낮은 퀄리티로 다시 뽑아냄 (pdfToImages는 고화질로 뽑았다고 가정)
-    // 여기서는 이미 base64로 되어있지만, 압축률 적용을 위해 이미지 객체로 변환 후 다시 캔버스에 그림
-    const img = new Image();
-    img.src = url;
-    await new Promise((resolve) => (img.onload = resolve));
-
-    const canvas = document.createElement("canvas");
-    canvas.width = img.width;
-    canvas.height = img.height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) continue;
-
-    ctx.drawImage(img, 0, 0);
-    // Quality 적용 (0.1 ~ 1.0)
-    const compressedDataUrl = canvas.toDataURL("image/jpeg", quality);
-    const compressedBytes = await fetch(compressedDataUrl).then((res) =>
-      res.arrayBuffer()
-    );
-
-    const embeddedImage = await pdfDoc.embedJpg(compressedBytes);
-    const page = pdfDoc.addPage([embeddedImage.width, embeddedImage.height]);
-    page.drawImage(embeddedImage, {
-      x: 0,
-      y: 0,
-      width: embeddedImage.width,
-      height: embeddedImage.height,
-    });
-  }
-  return pdfDoc.save();
+  onProgress?.(2, 3, "Compressing PDF with Ghostscript");
+  const { blob } = await getServerPdfJobBlob(response, "PDF 압축 실패");
+  onProgress?.(3, 3, "Downloading compressed PDF");
+  return blob;
 };
 
 // 2. 페이지 정리 (재배열, 회전, 삭제)
@@ -559,8 +602,7 @@ export const encryptPdf = async (
   });
 
   if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: '암호 설정 실패' }));
-    throw new Error(err.error || '암호 설정 실패');
+    throw new Error(await getPasswordApiErrorMessage(response, '암호 설정 실패'));
   }
 
   const { jobId } = await response.json();
@@ -702,8 +744,7 @@ export const unlockPdf = async (
   });
 
   if (!response.ok) {
-    const err = await response.json().catch(() => ({ error: '암호 해제 실패' }));
-    throw new Error(err.error || '암호 해제 실패');
+    throw new Error(await getPasswordApiErrorMessage(response, '암호 해제 실패'));
   }
 
   const { jobId } = await response.json();
@@ -811,7 +852,7 @@ export const renderPageToBlob = async (
   canvas.height = viewport.height;
   canvas.width = viewport.width;
 
-  await page.render({ canvasContext: context, viewport }).promise;
+  await page.render({ canvas, canvasContext: context, viewport }).promise;
 
   return new Promise<Blob | null>((resolve) => {
     canvas.toBlob((blob) => resolve(blob), "image/jpeg", quality);
@@ -866,6 +907,7 @@ export const renderPagesToCombinedBlob = async (
     
     // 캔버스에 렌더링
     await info.page.render({
+      canvas,
       canvasContext: context,
       viewport: info.viewport,
       transform: [1, 0, 0, 1, xOffset, currentY], // 변환 행렬로 위치 조정

@@ -13,6 +13,11 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@${pdfjsLib.v
 
 type Step = 'upload' | 'sign' | 'processing' | 'done'
 
+const toBlobPart = (bytes: Uint8Array): BlobPart =>
+  bytes.buffer instanceof ArrayBuffer
+    ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
+    : new Uint8Array(bytes).buffer
+
 export function SignTool() {
   const [step, setStep] = useState<Step>('upload')
   const [file, setFile] = useState<File | null>(null)
@@ -40,7 +45,7 @@ export function SignTool() {
     canvas.width = viewport.width
     canvas.height = viewport.height
     const ctx = canvas.getContext('2d')!
-    await page.render({ canvasContext: ctx, viewport }).promise
+    await page.render({ canvas, canvasContext: ctx, viewport }).promise
     setPageImage(canvas.toDataURL())
   }, [])
 
@@ -218,7 +223,7 @@ export function SignTool() {
       })
       return () => cancelAnimationFrame(rafId)
     }
-  }, [step])
+  }, [step, signPos])
 
   // ============================================================
   // 서명 실행
@@ -250,7 +255,7 @@ export function SignTool() {
         },
       ])
 
-      const blob = new Blob([result], { type: 'application/pdf' })
+      const blob = new Blob([toBlobPart(result)], { type: 'application/pdf' })
       setResultBlob(blob)
       setStep('done')
       toast.success('서명이 완료되었습니다.')
@@ -286,7 +291,7 @@ export function SignTool() {
           <div className="flex items-start gap-2">
             <Pen className="h-5 w-5 text-red-600 mt-0.5 shrink-0" />
             <div>
-              <p className="font-medium text-red-900">PDF 전자서명</p>
+              <p className="font-medium text-red-900">PDF 서명 이미지 삽입</p>
               <p className="text-sm text-red-700 mt-1">
                 PDF에 손글씨 서명을 삽입합니다. PDF 위에서 서명 위치를 직접 지정할 수 있습니다.
               </p>
@@ -307,7 +312,7 @@ export function SignTool() {
         </div>
 
         <p className="mt-4 text-xs text-center text-muted-foreground">
-          서명은 브라우저에서만 처리됩니다. 서버로 전송되지 않습니다.
+          손글씨 서명 이미지를 PDF에 삽입합니다. 인증서 기반 법적 전자서명은 아닙니다.
         </p>
       </div>
     )
