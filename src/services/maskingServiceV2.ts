@@ -14,6 +14,21 @@ interface TextItem {
   fontName: string
 }
 
+type CharPosition = {
+  char: string
+  item: TextItem
+  charIndex: number
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+type NormalizedText = {
+  text: string
+  chars: CharPosition[]
+}
+
 export interface DetectedInfo {
   type: 'rrn' | 'phone' | 'email' | 'account' | 'card'
   text: string
@@ -28,12 +43,16 @@ export interface DetectedInfo {
 
 // 패턴 정의
 const PATTERNS = {
-  rrn: /\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])[-]?\d{7}/g,
+  // RRN: normalized text removes PDF/OCR spacing first, so this covers both
+  // 900101-1234567 and 9 0 0 1 0 1 - 1 2 3 4 5 6 7.
+  rrn: /(?<![A-Za-z0-9])\d{6}[-]?\d{7}(?![A-Za-z0-9])/g,
   phone: /(01[016789]-?\d{3,4}-?\d{4})|(0[2-6][1-5]?-?\d{3,4}-?\d{4})/g,
   email: /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g,
   account: /\d{2,6}-\d{2,6}-\d{2,6}(-\d{1,3})?/g,
   card: /\d{4}[-\s]?\d{4}[-\s]?\d{4}[-\s]?\d{4}/g,
 }
+
+const BUSINESS_ID_CONTEXT = /(구직\s*등록\s*번\s*호|구직등록번호|발급\s*번\s*호|발급번호|등록\s*번\s*호|등록번호)$/
 
 // 감지 우선순위 (높을수록 우선): 같은 텍스트 영역이 겹치면 우선순위 높은 것만 유지
 const TYPE_PRIORITY: Record<string, number> = {
@@ -44,12 +63,20 @@ const TYPE_PRIORITY: Record<string, number> = {
   email: 1,
 }
 
+function configurePdfWorker(pdfjsLib: typeof import('pdfjs-dist')) {
+  // Keep PDF processing local and avoid a runtime dependency on the cdnjs worker.
+  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/build/pdf.worker.min.mjs',
+    import.meta.url
+  ).toString()
+}
+
 /**
  * pdfjs-dist를 사용해 PDF에서 텍스트 위치 정보를 추출합니다.
  */
 export async function extractTextPositions(pdfBytes: Uint8Array): Promise<Map<number, TextItem[]>> {
   const pdfjsLib = await import('pdfjs-dist')
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`
+  configurePdfWorker(pdfjsLib)
   const pdf = await pdfjsLib.getDocument({ data: pdfBytes }).promise
   const textMap = new Map<number, TextItem[]>()
 
@@ -86,18 +113,21 @@ export function detectInfoFromPositions(textMap: Map<number, TextItem[]>): Detec
   const detected: DetectedInfo[] = []
 
   for (const [pageIndex, items] of textMap) {
-    const fullText = items.map(item => item.str).join(' ')
+    const normalized = normalizeTextItems(items)
+    const fullText = normalized.text
 
-    // 주민등록번호 감지 (BUG-1: 체크섬 안 통과해도 패턴만 맞으면 감지, verified=false)
+    // 주민등록번호 감지: PDF가 숫자를 문자 단위로 분리해도 normalized text에서 검사한다.
     let match: RegExpExecArray | null
     const rrnRegex = new RegExp(PATTERNS.rrn.source, 'g')
     while ((match = rrnRegex.exec(fullText)) !== null) {
+      if (isLikelyBusinessIdentifier(fullText, match.index, match[0])) continue
+
       const valid = isValidRRN(match[0])
-      const pos = findTextPosition(items, match.index, match[0])
+      const pos = getMatchPosition(normalized, match.index, match[0].length)
       if (pos) {
         detected.push({
           type: 'rrn',
-          text: match[0],
+          text: formatRRN(match[0]),
           maskedText: maskRRN(match[0]),
           pageIndex,
           verified: valid,
@@ -106,14 +136,16 @@ export function detectInfoFromPositions(textMap: Map<number, TextItem[]>): Detec
       }
     }
 
-    // 전화번호 감지
+    // 전화번호 감지: 문자 단위로 분리된 0 3 2 - 5 4 0 - 5 6 4 1 형태도 감지한다.
     const phoneRegex = new RegExp(PATTERNS.phone.source, 'g')
     while ((match = phoneRegex.exec(fullText)) !== null) {
-      const pos = findTextPosition(items, match.index, match[0])
+      if (isLikelyBusinessIdentifier(fullText, match.index, match[0])) continue
+
+      const pos = getMatchPosition(normalized, match.index, match[0].length)
       if (pos) {
         detected.push({
           type: 'phone',
-          text: match[0],
+          text: formatPhone(match[0]),
           maskedText: maskPhone(match[0]),
           pageIndex,
           ...pos,
@@ -124,7 +156,7 @@ export function detectInfoFromPositions(textMap: Map<number, TextItem[]>): Detec
     // 이메일 감지
     const emailRegex = new RegExp(PATTERNS.email.source, 'g')
     while ((match = emailRegex.exec(fullText)) !== null) {
-      const pos = findTextPosition(items, match.index, match[0])
+      const pos = getMatchPosition(normalized, match.index, match[0].length)
       if (pos) {
         detected.push({
           type: 'email',
@@ -140,8 +172,8 @@ export function detectInfoFromPositions(textMap: Map<number, TextItem[]>): Detec
     const accountRegex = new RegExp(PATTERNS.account.source, 'g')
     while ((match = accountRegex.exec(fullText)) !== null) {
       const digits = match[0].replace(/-/g, '')
-      if (digits.length >= 10) {
-        const pos = findTextPosition(items, match.index, match[0])
+      if (digits.length >= 10 && !isLikelyDateAccountFalsePositive(match[0])) {
+        const pos = getMatchPosition(normalized, match.index, match[0].length)
         if (pos) {
           detected.push({
             type: 'account',
@@ -159,7 +191,7 @@ export function detectInfoFromPositions(textMap: Map<number, TextItem[]>): Detec
     while ((match = cardRegex.exec(fullText)) !== null) {
       const digits = match[0].replace(/[-\s]/g, '')
       if (digits.length === 16 && luhnCheck(digits)) {
-        const pos = findTextPosition(items, match.index, match[0])
+        const pos = getMatchPosition(normalized, match.index, match[0].length)
         if (pos) {
           detected.push({
             type: 'card',
@@ -226,45 +258,94 @@ function deduplicateDetections(items: DetectedInfo[]): DetectedInfo[] {
 }
 
 /**
- * 감지된 위치에서 매칭되는 텍스트 아이템의 위치를 찾습니다.
+ * PDF.js 텍스트 아이템을 공백 제거 normalized stream으로 바꾼다.
+ * 공공기관 PDF처럼 숫자가 문자 단위 아이템으로 분리되어도 정규식은 연속 문자열로 검사하고,
+ * 각 normalized 문자는 원본 PDF 좌표를 보존해서 실제 마스킹 위치를 복원한다.
  */
-function findTextPosition(
-  items: TextItem[],
-  matchIndex: number,
-  matchText: string
-): { x: number; y: number; width: number; height: number } | null {
-  let charIndex = 0
-  let startX = 0
-  let startY = 0
-  let maxWidth = 0
-  let maxHeight = 0
-  let found = false
+function normalizeTextItems(items: TextItem[]): NormalizedText {
+  const chars: CharPosition[] = []
 
   for (const item of items) {
-    const itemStart = charIndex
-    const itemEnd = charIndex + item.str.length
+    const raw = [...item.str]
+    if (raw.length === 0) continue
 
-    if (matchIndex >= itemStart && matchIndex < itemEnd) {
-      const offsetInItem = matchIndex - itemStart
-      const tx = item.transform
-      startX = tx[4] + (offsetInItem > 0 ? offsetInItem * (item.width / item.str.length) : 0)
-      startY = tx[5]
-      found = true
-    }
+    const tx = item.transform
+    const widthPerChar = item.width > 0 ? item.width / raw.length : Math.abs(tx[0]) || 8
+    const height = Math.abs(tx[3]) || item.height || 12
 
-    if (found) {
-      maxWidth += item.width * (Math.min(matchText.length, itemEnd - matchIndex) / item.str.length)
-      maxHeight = Math.max(maxHeight, Math.abs(item.transform[3]) || item.height)
-
-      const endOfMatch = matchIndex + matchText.length
-      if (itemEnd >= endOfMatch) break
-    }
-
-    charIndex = itemEnd + 1 // 공백 고려
+    raw.forEach((char, charIndex) => {
+      if (/\s/.test(char)) return
+      chars.push({
+        char,
+        item,
+        charIndex,
+        x: tx[4] + charIndex * widthPerChar,
+        y: tx[5],
+        width: widthPerChar,
+        height,
+      })
+    })
   }
 
-  if (!found) return null
-  return { x: startX, y: startY, width: maxWidth || 100, height: maxHeight || 14 }
+  return {
+    text: chars.map(c => c.char).join(''),
+    chars,
+  }
+}
+
+function getMatchPosition(
+  normalized: NormalizedText,
+  matchIndex: number,
+  matchLength: number
+): { x: number; y: number; width: number; height: number } | null {
+  const matchChars = normalized.chars.slice(matchIndex, matchIndex + matchLength)
+  if (matchChars.length === 0) return null
+
+  const xs = matchChars.map(c => c.x)
+  const ys = matchChars.map(c => c.y)
+  const x2s = matchChars.map(c => c.x + c.width)
+  const y2s = matchChars.map(c => c.y + c.height)
+  const x = Math.min(...xs)
+  const y = Math.min(...ys)
+  const width = Math.max(...x2s) - x
+  const height = Math.max(...y2s) - y
+
+  return { x, y, width, height }
+}
+
+function isLikelyBusinessIdentifier(fullText: string, matchIndex: number, matchText: string): boolean {
+  const before = fullText.slice(Math.max(0, matchIndex - 30), matchIndex)
+  const after = fullText.slice(matchIndex + matchText.length, matchIndex + matchText.length + 5)
+
+  // 구직등록번호는 보통 K + 숫자열 형태다. 주민번호로 오탐하지 않는다.
+  if (/[A-Za-z]$/.test(before)) return true
+  if (/^[A-Za-z0-9]/.test(after)) return true
+
+  const compactBefore = before.replace(/\s/g, '')
+  return BUSINESS_ID_CONTEXT.test(before) || BUSINESS_ID_CONTEXT.test(compactBefore)
+}
+
+function isLikelyDateAccountFalsePositive(text: string): boolean {
+  const [first, second, third] = text.split('-')
+  if (!first || !second || !third) return false
+  const year = Number(first)
+  const month = Number(second)
+  const day = Number(third.slice(0, 2))
+  return first.length === 4 && year >= 1900 && year <= 2099 && month >= 1 && month <= 12 && day >= 1 && day <= 31
+}
+
+function formatRRN(rrn: string): string {
+  const cleaned = rrn.replace('-', '')
+  if (cleaned.length !== 13) return rrn
+  return `${cleaned.slice(0, 6)}-${cleaned.slice(6)}`
+}
+
+function formatPhone(phone: string): string {
+  const digits = phone.replace(/-/g, '')
+  if (digits.length === 11) return `${digits.slice(0, 3)}-${digits.slice(3, 7)}-${digits.slice(7)}`
+  if (digits.length === 10 && digits.startsWith('02')) return `${digits.slice(0, 2)}-${digits.slice(2, 6)}-${digits.slice(6)}`
+  if (digits.length === 10) return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`
+  return phone
 }
 
 /**
@@ -394,7 +475,7 @@ function luhnCheck(num: string): boolean {
  */
 export async function extractTextFromPdf(pdfBytes: Uint8Array): Promise<string> {
   const pdfjsLib = await import('pdfjs-dist')
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`
+  configurePdfWorker(pdfjsLib)
   const pdf = await pdfjsLib.getDocument({ data: pdfBytes }).promise
   let fullText = ''
 
@@ -417,14 +498,18 @@ export function previewMasking(text: string): Omit<DetectedInfo, 'pageIndex' | '
   const result: Omit<DetectedInfo, 'pageIndex' | 'x' | 'y' | 'width' | 'height'>[] = []
   let match: RegExpExecArray | null
 
+  const normalizedText = text.replace(/\s+/g, '')
+
   const rrnRegex = new RegExp(PATTERNS.rrn.source, 'g')
-  while ((match = rrnRegex.exec(text)) !== null) {
-    result.push({ type: 'rrn', text: match[0], maskedText: maskRRN(match[0]), verified: isValidRRN(match[0]) })
+  while ((match = rrnRegex.exec(normalizedText)) !== null) {
+    if (isLikelyBusinessIdentifier(normalizedText, match.index, match[0])) continue
+    result.push({ type: 'rrn', text: formatRRN(match[0]), maskedText: maskRRN(match[0]), verified: isValidRRN(match[0]) })
   }
 
   const phoneRegex = new RegExp(PATTERNS.phone.source, 'g')
-  while ((match = phoneRegex.exec(text)) !== null) {
-    result.push({ type: 'phone', text: match[0], maskedText: maskPhone(match[0]) })
+  while ((match = phoneRegex.exec(normalizedText)) !== null) {
+    if (isLikelyBusinessIdentifier(normalizedText, match.index, match[0])) continue
+    result.push({ type: 'phone', text: formatPhone(match[0]), maskedText: maskPhone(match[0]) })
   }
 
   const emailRegex = new RegExp(PATTERNS.email.source, 'g')
@@ -435,7 +520,7 @@ export function previewMasking(text: string): Omit<DetectedInfo, 'pageIndex' | '
   const accountRegex = new RegExp(PATTERNS.account.source, 'g')
   while ((match = accountRegex.exec(text)) !== null) {
     const digits = match[0].replace(/-/g, '')
-    if (digits.length >= 10) {
+    if (digits.length >= 10 && !isLikelyDateAccountFalsePositive(match[0])) {
       result.push({ type: 'account', text: match[0], maskedText: maskAccount(match[0]) })
     }
   }
