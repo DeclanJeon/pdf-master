@@ -77,13 +77,20 @@ npm run dev:server
 상태 확인:
 
 ```bash
+curl http://localhost:3001/healthz
+curl http://localhost:3001/readyz
 curl http://localhost:3001/api/health
 ```
+
+`/healthz`는 프로세스 liveness, `/readyz`는 운영 필수 설정과 쓰기 가능한 runtime 디렉터리 확인, `/api/health`는 문서 처리 의존성 상태 확인용입니다.
 
 ## 주요 API
 
 | Endpoint | Method | 설명 |
 |---|---|---|
+| `/healthz` | GET | liveness probe |
+| `/readyz` | GET | 운영 설정/runtime readiness probe |
+| `/api/health` | GET | 문서 처리 의존성 상태 조회 |
 | `/api/convert/hwp-to-pdf` | POST | HWP/HWPX 업로드 후 PDF 변환 job 생성 |
 | `/api/convert/status/:jobId` | GET | 변환 진행률/결과 상태 조회 |
 | `/api/download/:jobId` | GET | 변환/암호 처리 결과 다운로드 |
@@ -102,6 +109,34 @@ curl http://localhost:3001/api/health
 | `/api/admin/revoke-premium` | POST | reason 필수 수동 프리미엄 권한 회수 |
 | `/api/admin/audit-logs` | GET | 관리자 조작 감사 로그 조회 |
 
+
+## 운영 출시 체크리스트
+
+`NODE_ENV=production`에서는 다음 값이 없거나 placeholder이면 서버가 시작하지 않습니다.
+
+- `SESSION_SECRET`: 32자 이상 랜덤 문자열, 예: `openssl rand -base64 32`
+- `PUBLIC_BASE_URL` 또는 `APP_URL`: API 서버의 HTTPS 공개 origin
+- `FRONTEND_URL`, `CORS_ORIGIN`: 실제 프론트엔드 origin allowlist
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`: Google OAuth Web application 설정
+- `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`: Polar API/Webhook credential
+- `POLAR_ONE_TIME_PRODUCT_ID`: 건당 결제 Polar product ID `3c5002d7-b5aa-4c8d-8fe4-433e8d46c239`
+- `POLAR_MONTHLY_PRODUCT_ID`: 월 구독 Polar product ID `d7cd5993-4d33-46d9-8ba6-994c70b527f9`
+- `COOKIE_SECURE=true`: 운영 HTTPS cookie 필수
+
+
+현재 연결된 Polar 상품:
+
+| 요금제 | Product ID | 통화/표시 가격 |
+|---|---|---|
+| 건당 결제 | `3c5002d7-b5aa-4c8d-8fe4-433e8d46c239` | KRW ₩1,000 |
+| 월 구독 | `d7cd5993-4d33-46d9-8ba6-994c70b527f9` | KRW ₩5,900/월 |
+
+결제 버튼은 운영자가 제공한 Polar checkout link를 우선 사용합니다. 건당 결제는 `https://buy.polar.sh/polar_cl_aGzorRvqZUgPJEt53EUCH6VZcuSyjV1hOrjBQ473ZZp`, 월 구독은 `https://buy.polar.sh/polar_cl_FFPmuDyi5Tp6g3NXSZWDenTjVJT2HYSN2UQu90uqaio`로 이동합니다. checkout link가 비어 있을 때만 서버가 Polar Checkout Session API로 fallback 생성합니다.
+
+Polar checkout은 서버에 설정된 product ID만 사용하며 클라이언트가 보낸 `productId`는 거부합니다. Webhook은 Standard Webhooks 서명 헤더를 검증하고 처리한 event/delivery ID를 저장해 중복 grant를 막습니다.
+
+운영 배포 전에는 실제 credential로 Google OAuth 로그인, Polar checkout 성공/취소, Polar webhook delivery, `/readyz` 200, 프리미엄 기능 다운로드 권한을 smoke test해야 합니다.
+
 ## 관리자/운영 설계
 
 결제 이후 운영자가 사용자 premium 상태를 확인·조정하고 감사 로그를 남기는 관리자 MVP는 `/admin` 화면과 `/api/admin/*` 서버 API로 제공됩니다. 설계 기준은 `docs/ADMIN_OPERATIONS_DESIGN_20250525.md`입니다.
@@ -111,7 +146,7 @@ curl http://localhost:3001/api/health
 - Google 로그인 세션 기반으로 관리자 판정
 - `ADMIN_EMAILS` allowlist로 서버에서 관리자 권한 강제
 - 모든 수동 premium grant/revoke는 reason 필수와 append-only 감사 로그 기록
-- 실제 Google OAuth/Polar webhook credential E2E와 배포 smoke는 운영 전 필수 검증
+- 실제 Google OAuth/Polar checkout/webhook credential E2E와 배포 smoke는 운영 전 필수 검증
 
 ## 기능별 현재 사용 가능 상태
 
@@ -146,9 +181,7 @@ npm run lint
 
 ## 남은 후속 개선
 
-- PDF 분할 결과를 실제 zip 또는 명확한 다중 다운로드 UX로 개선
-- PDF → 이미지 결과를 모든 페이지 zip 다운로드로 개선
 - HWP/HWPX → PDF 변환을 샘플 fixture 기반으로 품질 검증
 - PDF → HWP 스캔 이미지 OCR 연동으로 텍스트 추출 범위 확장
-- qpdf/LibreOffice/HWPForge 의존성 설치 여부를 배포 health check와 문서에서 더 강하게 검증
-- 결제/PRO 권한을 localStorage 중심이 아니라 서버 저장/검증 구조로 강화
+- 실제 운영 credential로 Polar/Google OAuth E2E smoke test 자동화
+- 샘플 fixture 기반 문서 변환 품질 회귀 테스트 확대

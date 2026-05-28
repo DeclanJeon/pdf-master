@@ -31,6 +31,46 @@ assert.match(server, /subscription\.canceled/, 'Polar subscription cancellation 
 assert.match(server, /premiumByEmail/, 'premium state must be stored server-side by email');
 assert.match(server, /subscriptionExpiresAt/, 'monthly premium must have an expiry');
 assert.match(server, /oneTimePasses/, 'one-time premium passes must be tracked');
+assert.match(server, /STARTUP_CONFIG_ERRORS/, 'production startup must fail fast on missing launch configuration');
+assert.match(server, /SESSION_SECRET = process\.env\.SESSION_SECRET \|\| \(IS_PRODUCTION \? '' : crypto\.randomBytes/, 'production must not generate ephemeral session secrets');
+assert.match(server, /CORS_ALLOWED_ORIGINS/, 'CORS origins must be allowlisted for credentialed requests');
+assert.match(server, /products:\s*\[selectedProductId\]/, 'Polar checkout must use server-selected product allowlist');
+assert.match(server, /configuredPolarCheckoutUrl/, 'checkout endpoint must prefer configured Polar checkout links');
+assert.match(server, /source:\s*'configured_link'/, 'checkout response must identify configured checkout link source');
+assert.match(server, /isPolarCheckoutUrl/, 'server must validate configured Polar checkout links');
+assert.match(server, /currency:\s*POLAR_CHECKOUT_CURRENCY/, 'Polar checkout must request KRW catalog pricing');
+assert.doesNotMatch(server, /prices:\s*polarCheckoutPrices/, 'Polar checkout must not override catalog one-time/subscription prices with ad-hoc prices');
+assert.match(server, /customer_ip_address:\s*clientIpAddress\(req\)/, 'Polar checkout must forward customer IP for currency selection');
+assert.match(server, /return_url:/, 'Polar checkout must use return_url for current checkout schema');
+assert.doesNotMatch(server, /cancel_url:\s*POLAR_CHECKOUT_CANCEL_URL/, 'Polar checkout create payload must not rely on deprecated cancel_url');
+assert.match(server, /POLAR_CHECKOUT_CURRENCY/, 'Polar checkout currency must be env-driven');
+assert.match(server, /POLAR_PRODUCT_ID_NOT_ALLOWED/, 'clients must not be allowed to submit arbitrary Polar product IDs');
+assert.match(server, /UUID_PATTERN/, 'server must validate Polar product IDs as UUIDs before calling Polar');
+assert.match(server, /POLAR_PRODUCT_ID_INVALID/, 'checkout must fail locally when a configured Polar product ID is malformed');
+assert.match(server, /must be a valid Polar product UUID/, 'production validation must reject malformed Polar product IDs');
+const envExample = fs.readFileSync('.env.example', 'utf8');
+const compose = fs.readFileSync('docker-compose.yml', 'utf8');
+assert.match(envExample, /POLAR_ONE_TIME_PRODUCT_ID=3c5002d7-b5aa-4c8d-8fe4-433e8d46c239/, 'env example must wire the Polar one-time KRW product ID');
+assert.match(envExample, /POLAR_MONTHLY_PRODUCT_ID=d7cd5993-4d33-46d9-8ba6-994c70b527f9/, 'env example must wire the Polar monthly KRW product ID');
+assert.match(envExample, /POLAR_CHECKOUT_CURRENCY=krw/, 'env example must request KRW checkout currency');
+assert.match(envExample, /POLAR_ONE_TIME_CHECKOUT_URL=https:\/\/buy.polar.sh\/polar_cl_aGzorRvqZUgPJEt53EUCH6VZcuSyjV1hOrjBQ473ZZp/, 'env example must wire the Polar one-time checkout link');
+assert.match(envExample, /POLAR_MONTHLY_CHECKOUT_URL=https:\/\/buy.polar.sh\/polar_cl_FFPmuDyi5Tp6g3NXSZWDenTjVJT2HYSN2UQu90uqaio/, 'env example must wire the Polar monthly checkout link');
+assert.match(compose, /POLAR_ONE_TIME_CHECKOUT_URL:-https:\/\/buy\.polar\.sh\/polar_cl_aGzorRvqZUgPJEt53EUCH6VZcuSyjV1hOrjBQ473ZZp/, 'docker compose must pass through the Polar one-time checkout link default');
+assert.match(compose, /POLAR_MONTHLY_CHECKOUT_URL:-https:\/\/buy\.polar\.sh\/polar_cl_FFPmuDyi5Tp6g3NXSZWDenTjVJT2HYSN2UQu90uqaio/, 'docker compose must pass through the Polar monthly checkout link default');
+assert.match(compose, /POLAR_ONE_TIME_PRODUCT_ID:-3c5002d7-b5aa-4c8d-8fe4-433e8d46c239/, 'docker compose must pass through the Polar one-time product ID default');
+assert.match(compose, /POLAR_MONTHLY_PRODUCT_ID:-d7cd5993-4d33-46d9-8ba6-994c70b527f9/, 'docker compose must pass through the Polar monthly product ID default');
+assert.match(server, /polarWebhookEvents/, 'Polar webhook events must be persisted for idempotency');
+assert.match(server, /hasProcessedPolarEvent/, 'Polar webhook handler must reject duplicate deliveries');
+assert.match(server, /GOOGLE_REDIRECT_URI is required/, 'production validation must require explicit Google redirect URI');
+assert.match(server, /ALL_ZERO_UUID/, 'production validation must reject placeholder product UUIDs');
+assert.match(server, /isPlaceholderConfigValue\(POLAR_ACCESS_TOKEN/, 'production validation must reject placeholder Polar access tokens');
+assert.match(server, /isPlaceholderConfigValue\(POLAR_WEBHOOK_SECRET/, 'production validation must reject placeholder Polar webhook secrets');
+assert.match(server, /POLAR_ONE_TIME_PRODUCT_ID must be a valid Polar product UUID/, 'production validation must require a valid one-time product UUID while one-time plan is visible');
+assert.match(server, /POLAR_MONTHLY_PRODUCT_ID must be a valid Polar product UUID/, 'production validation must require a valid monthly product UUID while monthly plan is visible');
+assert.match(server, /const idempotencyKey = deliveryId/, 'Polar webhook idempotency must use the Standard Webhooks delivery id');
+assert.doesNotMatch(server, /purchase\.eventId/, 'Polar webhook idempotency must not use arbitrary nested payload ids');
+assert.match(server, /Ignoring grant for unconfigured productId/, 'unknown Polar products must be ignored instead of granted');
+assert.doesNotMatch(server, /isOneTime \|\| !POLAR_MONTHLY_PRODUCT_ID/, 'missing monthly product must not make arbitrary products grant one-time access');
 
 // WORK-08: reusable server-side premium enforcement
 assert.match(server, /function requirePremium/, 'premium check must be reusable middleware');
@@ -42,5 +82,9 @@ assert.match(server, /app\.post\('\/api\/decrypt',\s*requirePremium/, 'decrypt e
 assert.match(server, /app\.post\('\/api\/convert\/pdf-to-hwp',\s*requirePremium/, 'pdf-to-hwp endpoint must enforce premium server-side');
 assert.match(server, /PREMIUM_REQUIRED/, 'unpaid users must get a deterministic 403 code');
 assert.match(server, /consumeOneTimePassForRequest/, 'one-time premium passes must be consumed after successful premium use');
+assert.match(server, /ownerEmail/, 'premium server-generated downloads must be tied to the requesting account');
+assert.match(server, /DOWNLOAD_FORBIDDEN/, "download endpoint must reject access to another user\'s premium job output");
+assert.match(server, /app\.get\('\/readyz'/, 'server must expose readiness endpoint for production probes');
+assert.match(server, /app\.get\('\/healthz'/, 'server must expose lightweight liveness endpoint');
 
 console.log('backend auth/premium static contract passed');

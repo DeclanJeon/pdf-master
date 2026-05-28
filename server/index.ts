@@ -16,6 +16,7 @@ const execFileAsync = promisify(execFile);
 const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3001;
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
 // --- Config ---
 const HWPFORGE_PATH = process.env.HWPFORGE_PATH || path.resolve(__dirname, '../../pdf-master-references/HwpForge/target/release/hwpforge');
@@ -52,8 +53,8 @@ const SESSION_COOKIE_NAME = process.env.SESSION_COOKIE_NAME || 'pdfm_session';
 const OAUTH_STATE_COOKIE_NAME = 'pdfm_oauth_state';
 const OAUTH_REDIRECT_COOKIE_NAME = 'pdfm_oauth_redirect';
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 30 * 24 * 60 * 60 * 1000);
-const SESSION_SECRET = process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex');
-const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || process.env.NODE_ENV === 'production';
+const SESSION_SECRET = process.env.SESSION_SECRET || (IS_PRODUCTION ? '' : crypto.randomBytes(32).toString('hex'));
+const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || IS_PRODUCTION;
 const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || process.env.APP_URL || '';
 const FRONTEND_URL = process.env.FRONTEND_URL || '';
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
@@ -63,14 +64,99 @@ const POLAR_ACCESS_TOKEN = process.env.POLAR_ACCESS_TOKEN || '';
 const POLAR_WEBHOOK_SECRET = process.env.POLAR_WEBHOOK_SECRET || '';
 const POLAR_ONE_TIME_PRODUCT_ID = process.env.POLAR_ONE_TIME_PRODUCT_ID || process.env.POLAR_PRODUCT_ID || '';
 const POLAR_MONTHLY_PRODUCT_ID = process.env.POLAR_MONTHLY_PRODUCT_ID || process.env.POLAR_SUBSCRIPTION_PRODUCT_ID || '';
+const POLAR_CHECKOUT_CURRENCY = (process.env.POLAR_CHECKOUT_CURRENCY || 'krw').toLowerCase();
+const POLAR_ONE_TIME_CHECKOUT_URL = process.env.POLAR_ONE_TIME_CHECKOUT_URL || '';
+const POLAR_MONTHLY_CHECKOUT_URL = process.env.POLAR_MONTHLY_CHECKOUT_URL || '';
 const POLAR_CHECKOUT_SUCCESS_URL = process.env.POLAR_CHECKOUT_SUCCESS_URL || '';
 const POLAR_CHECKOUT_CANCEL_URL = process.env.POLAR_CHECKOUT_CANCEL_URL || '';
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '').split(',').map((email) => normalizeEmail(email)).filter(Boolean);
 const ADMIN_AUDIT_LOG_PATH = process.env.ADMIN_AUDIT_LOG_PATH || path.resolve(__dirname, '../data/admin-audit.log');
+const CORS_ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || FRONTEND_URL)
+  .split(',')
+  .map((origin) => origin.trim().replace(/\/$/, ''))
+  .filter(Boolean);
+
+const PLACEHOLDER_SECRETS = new Set([
+  '',
+  'change-me-in-production',
+  'replace-with-a-strong-random-session-secret',
+  'your-google-client-secret',
+]);
+const ALL_ZERO_UUID = '00000000-0000-0000-0000-000000000000';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isPolarProductId(value: string): boolean {
+  return UUID_PATTERN.test(value.trim());
+}
+
+function isPlaceholderConfigValue(value: string, examples: string[] = []): boolean {
+  const normalized = value.trim();
+  if (!normalized || examples.includes(normalized)) return true;
+  if (normalized === ALL_ZERO_UUID) return true;
+  return /x{6,}/i.test(normalized) || normalized.includes('your-') || normalized.includes('replace-with-');
+}
+
+function configuredPolarProducts() {
+  return {
+    one_time: POLAR_ONE_TIME_PRODUCT_ID,
+    monthly: POLAR_MONTHLY_PRODUCT_ID,
+  } as const;
+}
+
+function configuredPolarCheckoutUrl(plan: 'one_time' | 'monthly'): string {
+  return plan === 'monthly' ? POLAR_MONTHLY_CHECKOUT_URL : POLAR_ONE_TIME_CHECKOUT_URL;
+}
+
+function isPolarCheckoutUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && url.hostname === 'buy.polar.sh' && url.pathname.startsWith('/polar_cl_');
+  } catch {
+    return false;
+  }
+}
+
+function clientIpAddress(req: Request): string | undefined {
+  const forwardedFor = req.get('x-forwarded-for')?.split(',')[0]?.trim();
+  return forwardedFor || req.ip || undefined;
+}
+
+function productionConfigErrors(): string[] {
+  if (!IS_PRODUCTION) return [];
+  const errors: string[] = [];
+  if (PLACEHOLDER_SECRETS.has(SESSION_SECRET) || SESSION_SECRET.length < 32) errors.push('SESSION_SECRET must be a non-placeholder value with at least 32 characters');
+  if (!PUBLIC_BASE_URL && !process.env.APP_URL) errors.push('PUBLIC_BASE_URL or APP_URL is required');
+  if (!FRONTEND_URL) errors.push('FRONTEND_URL is required');
+  if (CORS_ALLOWED_ORIGINS.length === 0) errors.push('CORS_ORIGIN is required');
+  if (!GOOGLE_CLIENT_ID || isPlaceholderConfigValue(GOOGLE_CLIENT_ID, ['your-google-client-id.apps.googleusercontent.com'])) errors.push('GOOGLE_CLIENT_ID is required');
+  if (!GOOGLE_CLIENT_SECRET || PLACEHOLDER_SECRETS.has(GOOGLE_CLIENT_SECRET) || isPlaceholderConfigValue(GOOGLE_CLIENT_SECRET, ['your-google-client-secret'])) errors.push('GOOGLE_CLIENT_SECRET is required');
+  if (!GOOGLE_REDIRECT_URI) errors.push('GOOGLE_REDIRECT_URI is required');
+  if (!POLAR_ACCESS_TOKEN || isPlaceholderConfigValue(POLAR_ACCESS_TOKEN, ['polar_oat_xxxxxxxxxxxxxxxxxxxxx'])) errors.push('POLAR_ACCESS_TOKEN is required');
+  if (!POLAR_WEBHOOK_SECRET || isPlaceholderConfigValue(POLAR_WEBHOOK_SECRET, ['whsec_xxxxxxxxxxxxxxxxxxxxx', 'polar_whsec_xxxxxxxxxxxxxxxxxxxxx'])) errors.push('POLAR_WEBHOOK_SECRET is required');
+  if (isPlaceholderConfigValue(POLAR_ONE_TIME_PRODUCT_ID) || !isPolarProductId(POLAR_ONE_TIME_PRODUCT_ID)) errors.push('POLAR_ONE_TIME_PRODUCT_ID must be a valid Polar product UUID');
+  if (isPlaceholderConfigValue(POLAR_MONTHLY_PRODUCT_ID) || !isPolarProductId(POLAR_MONTHLY_PRODUCT_ID)) errors.push('POLAR_MONTHLY_PRODUCT_ID must be a valid Polar product UUID');
+  if (!isPolarCheckoutUrl(POLAR_ONE_TIME_CHECKOUT_URL)) errors.push('POLAR_ONE_TIME_CHECKOUT_URL must be a valid Polar checkout link');
+  if (!isPolarCheckoutUrl(POLAR_MONTHLY_CHECKOUT_URL)) errors.push('POLAR_MONTHLY_CHECKOUT_URL must be a valid Polar checkout link');
+  if (POLAR_CHECKOUT_CURRENCY !== 'krw') errors.push('POLAR_CHECKOUT_CURRENCY must be krw');
+  if (COOKIE_SECURE !== true) errors.push('COOKIE_SECURE must be true in production');
+  return errors;
+}
+
+const STARTUP_CONFIG_ERRORS = productionConfigErrors();
+if (STARTUP_CONFIG_ERRORS.length > 0) {
+  throw new Error(`Production configuration is not launch-ready: ${STARTUP_CONFIG_ERRORS.join('; ')}`);
+}
+
+function corsOrigin(origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) {
+  if (!IS_PRODUCTION && CORS_ALLOWED_ORIGINS.length === 0) return callback(null, true);
+  if (!origin) return callback(null, true);
+  const normalizedOrigin = origin.replace(/\/$/, '');
+  return callback(null, CORS_ALLOWED_ORIGINS.includes(normalizedOrigin));
+}
 
 // --- Middleware ---
 app.use(cors({
-  origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',').map((origin) => origin.trim()) : true,
+  origin: corsOrigin,
   credentials: true,
 }));
 app.use(express.json({
@@ -116,6 +202,7 @@ interface PremiumRecord {
 interface AuthStore {
   sessions: Record<string, SessionRecord>;
   premiumByEmail: Record<string, PremiumRecord>;
+  polarWebhookEvents: Record<string, { type: string; email?: string; processedAt: string }>;
 }
 
 interface PremiumStatus {
@@ -146,7 +233,7 @@ interface AdminAuditRecord {
 }
 
 function defaultAuthStore(): AuthStore {
-  return { sessions: {}, premiumByEmail: {} };
+  return { sessions: {}, premiumByEmail: {}, polarWebhookEvents: {} };
 }
 
 function ensureParentDir(filePath: string) {
@@ -160,6 +247,7 @@ function readAuthStore(): AuthStore {
     return {
       sessions: parsed.sessions || {},
       premiumByEmail: parsed.premiumByEmail || {},
+      polarWebhookEvents: parsed.polarWebhookEvents || {},
     };
   } catch (err) {
     console.error('[AUTH] Failed to read auth store:', err instanceof Error ? err.message : err);
@@ -2034,6 +2122,18 @@ app.post('/api/auth/logout', (req: Request, res: Response) => {
   res.json({ ok: true });
 });
 
+function hasProcessedPolarEvent(eventId?: string): boolean {
+  if (!eventId) return false;
+  return Boolean(readAuthStore().polarWebhookEvents[eventId]);
+}
+
+function recordProcessedPolarEvent(eventId: string | undefined, type: string, email?: string) {
+  if (!eventId) return;
+  const store = readAuthStore();
+  store.polarWebhookEvents[eventId] = { type, email: email ? normalizeEmail(email) : undefined, processedAt: new Date().toISOString() };
+  writeAuthStore(store);
+}
+
 function rawBodyForSignature(req: Request): Buffer {
   return (req as RequestWithRawBody).rawBody || Buffer.from(JSON.stringify(req.body || {}));
 }
@@ -2102,15 +2202,41 @@ function findStringByKeys(value: unknown, keys: string[], predicate: (candidate:
   return undefined;
 }
 
-function extractPolarPurchase(payload: unknown) {
-  const email = findStringByKeys(payload, ['customerEmail', 'customer_email', 'email'], (value) => value.includes('@'));
-  const productId = findStringByKeys(payload, ['productId', 'product_id'], Boolean);
-  const eventId = findStringByKeys(payload, ['id', 'eventId', 'event_id'], Boolean);
-  const expiresAt = findStringByKeys(payload, ['expiresAt', 'expires_at', 'currentPeriodEnd', 'current_period_end'], (value) => !Number.isNaN(Date.parse(value)));
-  return { email, productId, eventId, expiresAt };
+function stringFromRecord(record: Record<string, unknown>, keys: string[], predicate: (candidate: string) => boolean = Boolean): string | undefined {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && predicate(value)) return value;
+  }
+  return undefined;
 }
 
-function recordPolarPurchase(email: string, productId?: string, eventId?: string, expiresAt?: string) {
+function extractPolarProductId(data: unknown): string | undefined {
+  if (!isRecord(data)) return findStringByKeys(data, ['productId', 'product_id'], Boolean);
+  const direct = stringFromRecord(data, ['productId', 'product_id'], Boolean);
+  if (direct) return direct;
+  if (isRecord(data.product)) {
+    const productId = stringFromRecord(data.product, ['id', 'productId', 'product_id'], Boolean);
+    if (productId) return productId;
+  }
+  if (Array.isArray(data.products)) {
+    for (const product of data.products) {
+      if (!isRecord(product)) continue;
+      const productId = stringFromRecord(product, ['id', 'productId', 'product_id'], Boolean);
+      if (productId) return productId;
+    }
+  }
+  return findStringByKeys(data, ['productId', 'product_id'], Boolean);
+}
+
+function extractPolarPurchase(payload: unknown) {
+  const data = isRecord(payload) && isRecord(payload.data) ? payload.data : payload;
+  const email = findStringByKeys(data, ['customerEmail', 'customer_email', 'email'], (value) => value.includes('@'));
+  const productId = extractPolarProductId(data);
+  const expiresAt = findStringByKeys(data, ['expiresAt', 'expires_at', 'currentPeriodEnd', 'current_period_end'], (value) => !Number.isNaN(Date.parse(value)));
+  return { email, productId, expiresAt };
+}
+
+function recordPolarPurchase(email: string, productId?: string, eventId?: string, expiresAt?: string): PremiumRecord | null {
   const store = readAuthStore();
   const key = normalizeEmail(email);
   const now = new Date();
@@ -2126,17 +2252,19 @@ function recordPolarPurchase(email: string, productId?: string, eventId?: string
     return existing;
   }
 
-  const isMonthly = productId && POLAR_MONTHLY_PRODUCT_ID && productId === POLAR_MONTHLY_PRODUCT_ID;
-  const isOneTime = productId && POLAR_ONE_TIME_PRODUCT_ID && productId === POLAR_ONE_TIME_PRODUCT_ID;
+  const isMonthly = Boolean(productId && POLAR_MONTHLY_PRODUCT_ID && productId === POLAR_MONTHLY_PRODUCT_ID);
+  const isOneTime = Boolean(productId && POLAR_ONE_TIME_PRODUCT_ID && productId === POLAR_ONE_TIME_PRODUCT_ID);
+  if (!isMonthly && !isOneTime) {
+    console.warn(`[POLAR] Ignoring grant for unconfigured productId=${productId || 'missing'} email=${key}`);
+    return null;
+  }
   if (isMonthly) {
     const defaultExpiry = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
     existing.subscriptionExpiresAt = expiresAt || defaultExpiry;
     existing.plan = 'monthly';
-  } else if (isOneTime || !POLAR_MONTHLY_PRODUCT_ID) {
+  } else {
     existing.oneTimePasses += 1;
     existing.plan = 'one_time';
-  } else {
-    existing.plan = 'unknown';
   }
 
   if (productId && !existing.productIds.includes(productId)) existing.productIds.push(productId);
@@ -2167,23 +2295,43 @@ app.post('/api/polar/checkout', async (req: Request, res: Response) => {
   if (!POLAR_ACCESS_TOKEN) return res.status(503).json({ error: 'Polar API 토큰이 설정되지 않았습니다.', code: 'POLAR_NOT_CONFIGURED' });
 
   const { productId, plan } = req.body as { productId?: string; plan?: 'one_time' | 'monthly' };
-  const selectedProductId = productId || (plan === 'monthly' ? POLAR_MONTHLY_PRODUCT_ID : POLAR_ONE_TIME_PRODUCT_ID);
+  if (productId) {
+    return res.status(400).json({ error: '클라이언트에서 직접 productId를 지정할 수 없습니다.', code: 'POLAR_PRODUCT_ID_NOT_ALLOWED' });
+  }
+  const selectedPlan = plan === 'monthly' ? 'monthly' : 'one_time';
+  const configuredCheckoutUrl = configuredPolarCheckoutUrl(selectedPlan);
+  if (configuredCheckoutUrl) {
+    if (!isPolarCheckoutUrl(configuredCheckoutUrl)) {
+      return res.status(503).json({ error: '선택한 Polar checkout 링크 형식이 올바르지 않습니다.', code: 'POLAR_CHECKOUT_URL_INVALID' });
+    }
+    const url = new URL(configuredCheckoutUrl);
+    if (session.user.email) url.searchParams.set('customer_email', session.user.email);
+    return res.json({ checkoutUrl: url.toString(), checkout: { source: 'configured_link', plan: selectedPlan } });
+  }
+
+  const selectedProductId = configuredPolarProducts()[selectedPlan];
   if (!selectedProductId) {
-    return res.status(400).json({ error: 'Polar productId가 필요합니다.', code: 'POLAR_PRODUCT_ID_REQUIRED' });
+    return res.status(503).json({ error: '선택한 Polar 상품이 서버에 설정되지 않았습니다.', code: 'POLAR_PRODUCT_NOT_CONFIGURED' });
+  }
+  if (!isPolarProductId(selectedProductId)) {
+    return res.status(503).json({ error: '선택한 Polar 상품 ID 형식이 올바르지 않습니다. 관리자에게 product ID를 확인해주세요.', code: 'POLAR_PRODUCT_ID_INVALID' });
   }
 
   try {
-    const response = await fetch('https://api.polar.sh/v1/checkouts', {
+    const response = await fetch('https://api.polar.sh/v1/checkouts/', {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${POLAR_ACCESS_TOKEN}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        product_id: selectedProductId,
+        products: [selectedProductId],
+        currency: POLAR_CHECKOUT_CURRENCY,
         customer_email: session.user.email,
-        success_url: POLAR_CHECKOUT_SUCCESS_URL || `${getRequestBaseUrl(req)}/pricing?success=1`,
-        cancel_url: POLAR_CHECKOUT_CANCEL_URL || `${getRequestBaseUrl(req)}/pricing?cancel=1`,
+        customer_ip_address: clientIpAddress(req),
+        external_customer_id: session.user.id,
+        success_url: POLAR_CHECKOUT_SUCCESS_URL || `${getFrontendRedirectUrl(req, '/pricing')}?success=1`,
+        return_url: POLAR_CHECKOUT_SUCCESS_URL || `${getFrontendRedirectUrl(req, '/pricing')}?success=1`,
       }),
     });
     const data = await response.json() as Record<string, unknown>;
@@ -2214,20 +2362,33 @@ app.post('/api/polar/webhook', (req: Request, res: Response) => {
         ? req.body.event_type
         : '';
 
+  const deliveryId = req.get('webhook-id') || req.get('polar-webhook-id') || '';
   const grantEvents = ['order.paid', 'subscription.active', 'subscription.renewed'];
-  const cancellationEvents = ['subscription.canceled', 'subscription.revoked'];
-  if (![...grantEvents, ...cancellationEvents].includes(eventType)) {
+  const cancellationEvents = ['subscription.revoked'];
+  const lifecycleEvents = ['subscription.canceled', 'subscription.updated'];
+  if (![...grantEvents, ...cancellationEvents, ...lifecycleEvents].includes(eventType)) {
+    recordProcessedPolarEvent(deliveryId, eventType);
     return res.json({ ok: true, ignored: true });
   }
 
   const purchase = extractPolarPurchase(req.body);
+  const idempotencyKey = deliveryId;
+  if (hasProcessedPolarEvent(idempotencyKey)) {
+    return res.json({ ok: true, duplicate: true });
+  }
   if (!purchase.email) {
     return res.status(400).json({ error: 'Polar webhook에서 구매자 email을 찾지 못했습니다.', code: 'POLAR_EMAIL_MISSING' });
   }
 
+  if (lifecycleEvents.includes(eventType)) {
+    recordProcessedPolarEvent(idempotencyKey, eventType, purchase.email);
+    return res.json({ ok: true, ignored: true });
+  }
+
   const record = cancellationEvents.includes(eventType)
-    ? recordPolarSubscriptionEnded(purchase.email, purchase.eventId)
-    : recordPolarPurchase(purchase.email, purchase.productId, purchase.eventId, purchase.expiresAt);
+    ? recordPolarSubscriptionEnded(purchase.email, idempotencyKey)
+    : recordPolarPurchase(purchase.email, purchase.productId, idempotencyKey, purchase.expiresAt);
+  recordProcessedPolarEvent(idempotencyKey, eventType, purchase.email);
   if (!record) return res.json({ ok: true, ignored: true });
   res.json({ ok: true, premium: getPremiumStatusForEmail(record.email) });
 });
@@ -2380,6 +2541,7 @@ interface ConversionJob {
   originalName?: string;
   resultFilename?: string;
   deleteAt?: number;
+  ownerEmail?: string;
 }
 
 const jobs = new Map<string, ConversionJob>();
@@ -2542,6 +2704,11 @@ app.get('/api/download/:jobId', (req: Request, res: Response) => {
   const job = jobs.get(jobId);
   if (!job || job.status !== 'completed') {
     return res.status(404).json({ error: '다운로드할 파일이 없습니다.' });
+  }
+  if (job.ownerEmail) {
+    const session = getSessionFromRequest(req);
+    const canDownload = session && (isAdminEmail(session.user.email) || normalizeEmail(session.user.email) === normalizeEmail(job.ownerEmail));
+    if (!canDownload) return res.status(403).json({ error: '다운로드 권한이 없습니다.', code: 'DOWNLOAD_FORBIDDEN' });
   }
   // Use job.outputPath directly (supports encrypted.pdf, decrypted.pdf, output.pdf, .odt etc.)
   const filePath = job.outputPath || path.join(OUTPUT_DIR, job.id, 'output.pdf');
@@ -2719,6 +2886,7 @@ app.post('/api/encrypt', requirePremium, upload.single('file'), async (req: Prem
       originalName: req.file.originalname,
       resultFilename: req.file.originalname.replace('.pdf', '_encrypted.pdf'),
       deleteAt: Date.now() + 10 * 60 * 1000,
+      ownerEmail: req.sessionRecord?.user.email,
     });
     consumeOneTimePassForRequest(req);
     res.json({ jobId, status: 'completed', progress: 100 });
@@ -2766,6 +2934,7 @@ app.post('/api/decrypt', requirePremium, upload.single('file'), async (req: Prem
       originalName: req.file.originalname,
       resultFilename: req.file.originalname.replace('.pdf', '_decrypted.pdf'),
       deleteAt: Date.now() + 10 * 60 * 1000,
+      ownerEmail: req.sessionRecord?.user.email,
     });
     consumeOneTimePassForRequest(req);
     res.json({ jobId, status: 'completed', progress: 100 });
@@ -2940,6 +3109,7 @@ app.post('/api/convert/pdf-to-hwp', requirePremium, upload.single('file'), async
       originalName: req.file.originalname,
       resultFilename: finalResultFilename,
       deleteAt: Date.now() + 10 * 60 * 1000,
+      ownerEmail: req.sessionRecord?.user.email,
     });
     consumeOneTimePassForRequest(req);
     res.json({ jobId, status: 'completed', progress: 100, format: 'hwp' });
@@ -2956,9 +3126,8 @@ app.post('/api/convert/pdf-to-hwp', requirePremium, upload.single('file'), async
 // ============================================================
 // Health Check
 // ============================================================
-app.get('/api/health', (_req: Request, res: Response) => {
-  res.json({
-    status: 'ok',
+function dependencyStatus() {
+  return {
     hwpforge: fs.existsSync(HWPFORGE_PATH),
     soffice: commandAvailable(SOFFICE_PATH),
     hwpx2html: fs.existsSync(HWPX2HTML_PATH),
@@ -2976,6 +3145,40 @@ app.get('/api/health', (_req: Request, res: Response) => {
     pdf2docxScript: fs.existsSync(PDF2DOCX_SCRIPT_PATH),
     pdf2docxMode: PDF2DOCX_LAYOUT_MODE,
     pdfToHwpPrimaryPipeline: PDF_HWP_PRIMARY_PIPELINE,
+  };
+}
+
+function readinessProblems(): string[] {
+  const problems = [...STARTUP_CONFIG_ERRORS];
+  for (const dir of [UPLOAD_DIR, OUTPUT_DIR, path.dirname(AUTH_STORE_PATH), path.dirname(ADMIN_AUDIT_LOG_PATH)]) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.accessSync(dir, fs.constants.W_OK);
+    } catch {
+      problems.push(`Directory is not writable: ${path.basename(dir)}`);
+    }
+  }
+  return problems;
+}
+
+app.get('/healthz', (_req: Request, res: Response) => {
+  res.json({ status: 'ok' });
+});
+
+app.get('/readyz', (_req: Request, res: Response) => {
+  const problems = readinessProblems();
+  res.status(problems.length > 0 ? 503 : 200).json({
+    status: problems.length > 0 ? 'not_ready' : 'ready',
+    problems,
+    production: IS_PRODUCTION,
+    dependencies: dependencyStatus(),
+  });
+});
+
+app.get('/api/health', (_req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    ...dependencyStatus(),
   });
 });
 

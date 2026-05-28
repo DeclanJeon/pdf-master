@@ -26,6 +26,12 @@ type AuthState = {
   isAdmin: boolean
 }
 
+type CheckoutResponse = {
+  checkoutUrl?: string
+  error?: string
+  code?: string
+}
+
 interface Feature {
   name: string
   free: boolean | string
@@ -53,9 +59,42 @@ const FEATURES: Feature[] = [
   { name: '우선 처리',           free: false, perUse: false, monthly: true },
 ]
 
+const CHECKOUT_ERROR_MESSAGES: Record<string, string> = {
+  LOGIN_REQUIRED: '로그인이 필요합니다. Google 로그인 후 다시 결제를 시도해주세요.',
+  POLAR_NOT_CONFIGURED: '결제 설정이 아직 완료되지 않았습니다. 관리자에게 문의해주세요.',
+  POLAR_PRODUCT_NOT_CONFIGURED: '선택한 요금제의 결제 상품이 아직 준비되지 않았습니다. 다른 요금제를 선택하거나 잠시 후 다시 시도해주세요.',
+  POLAR_PRODUCT_ID_INVALID: '선택한 요금제의 Polar 상품 ID 형식이 올바르지 않습니다. 관리자에게 결제 설정 확인을 요청해주세요.',
+  POLAR_PRODUCT_ID_NOT_ALLOWED: '요금제 상품 정보가 유효하지 않습니다. 페이지를 새로고침한 뒤 다시 시도해주세요.',
+  POLAR_CHECKOUT_REJECTED: 'Polar가 checkout 요청을 거부했습니다. 상품의 KRW 가격 설정 또는 통화 지원 상태를 확인해주세요.',
+}
+
+const parseCheckoutResponse = async (response: Response): Promise<CheckoutResponse> => {
+  const payload: unknown = await response.json().catch(() => ({}))
+
+  if (!payload || typeof payload !== 'object') {
+    return {}
+  }
+
+  const data = payload as Record<string, unknown>
+  return {
+    checkoutUrl: typeof data.checkoutUrl === 'string' ? data.checkoutUrl : undefined,
+    error: typeof data.error === 'string' ? data.error : undefined,
+    code: typeof data.code === 'string' ? data.code : undefined,
+  }
+}
+
+const getCheckoutErrorMessage = ({ error, code }: CheckoutResponse) => {
+  if (code && CHECKOUT_ERROR_MESSAGES[code]) {
+    return CHECKOUT_ERROR_MESSAGES[code]
+  }
+
+  return error || '결제 오류가 발생했습니다. 잠시 후 다시 시도해주세요.'
+}
+
 export default function PaymentPage() {
   const [searchParams] = useSearchParams()
   const [paymentLoading, setPaymentLoading] = useState<PlanId | null>(null)
+  const [checkoutErrorText, setCheckoutErrorText] = useState<string | null>(null)
   const [auth, setAuth] = useState<AuthState>({ loading: true, loggedIn: false, user: null, premium: EMPTY_PREMIUM, isAdmin: false })
   const { dailyFreeUsed, dailyFreeLimit, setPremiumUnlocked } = useAppStore()
   const checkoutSuccess = searchParams.get('success') === 'true' || searchParams.get('success') === '1'
@@ -113,6 +152,7 @@ export default function PaymentPage() {
       return
     }
 
+    setCheckoutErrorText(null)
     setPaymentLoading(plan)
     try {
       const response = await fetch('/api/polar/checkout', {
@@ -121,14 +161,15 @@ export default function PaymentPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ plan }),
       })
-      const data = await response.json().catch(() => ({})) as { checkoutUrl?: string; error?: string }
+      const data = await parseCheckoutResponse(response)
       if (!response.ok || !data.checkoutUrl) {
-        throw new Error(data.error || 'Polar checkout 생성 실패')
+        setCheckoutErrorText(getCheckoutErrorMessage(data))
+        return
       }
       window.location.href = data.checkoutUrl
     } catch (err) {
       console.error('Payment error:', err)
-      alert(err instanceof Error ? err.message : '결제 오류가 발생했습니다.')
+      setCheckoutErrorText('결제 요청 중 네트워크 오류가 발생했습니다. 연결 상태를 확인한 뒤 다시 시도해주세요.')
     } finally {
       setPaymentLoading(null)
     }
@@ -193,6 +234,11 @@ export default function PaymentPage() {
             결제 처리 오류: {checkoutError}
           </div>
         )}
+        {checkoutErrorText && (
+          <div className="mx-auto max-w-xl rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {checkoutErrorText}
+          </div>
+        )}
         <p className="text-xs text-muted-foreground">오늘 무료 사용: {dailyFreeUsed}/{dailyFreeLimit}</p>
         <div className="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-br from-yellow-400 to-orange-500 flex items-center justify-center shadow-lg">
           <Crown className="w-7 h-7 text-white" />
@@ -254,7 +300,7 @@ export default function PaymentPage() {
               <span className="text-4xl font-bold">₩1,000</span>
               <span className="text-muted-foreground text-sm">/건</span>
             </div>
-            <p className="text-sm text-muted-foreground mt-1">필요할 때만</p>
+            <p className="text-sm text-muted-foreground mt-1">원화(KRW) 기준 · 필요할 때만</p>
           </CardHeader>
           <CardContent className="space-y-4">
             <ul className="space-y-2.5">
@@ -289,7 +335,7 @@ export default function PaymentPage() {
               <span className="text-4xl font-bold">₩5,900</span>
               <span className="text-muted-foreground text-sm">/월</span>
             </div>
-            <p className="text-sm text-muted-foreground mt-1">무제한 프리미엄 기능</p>
+            <p className="text-sm text-muted-foreground mt-1">원화(KRW) 기준 · 무제한 프리미엄 기능</p>
           </CardHeader>
           <CardContent className="space-y-4">
             <ul className="space-y-2.5">

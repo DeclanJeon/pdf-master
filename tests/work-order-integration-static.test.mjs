@@ -14,6 +14,13 @@ assert.doesNotMatch(payment, /loadTossPayments|VITE_TOSS_CLIENT_KEY|pdfmaster_pr
 assert.match(payment, /\/api\/auth\/me/, 'PaymentPage must read server auth state');
 assert.match(payment, /\/api\/auth\/google/, 'PaymentPage must start Google login');
 assert.match(payment, /\/api\/polar\/checkout/, 'PaymentPage must create Polar checkout sessions');
+assert.match(payment, /CHECKOUT_ERROR_MESSAGES/, 'PaymentPage must map checkout error codes to inline Korean messages');
+assert.match(payment, /POLAR_PRODUCT_ID_INVALID/, 'PaymentPage must show a clear message for malformed Polar product IDs');
+assert.match(payment, /checkoutErrorText/, 'PaymentPage must render checkout failures inline');
+assert.match(payment, /원화\(KRW\) 기준/, 'PaymentPage must clearly show KRW pricing copy');
+assert.doesNotMatch(payment, /alert\(/, 'PaymentPage must not use browser alerts for checkout failures');
+assert.match(server, /readyz/, 'server must expose readiness status for launch operations');
+assert.match(server, /healthz/, 'server must expose liveness status for launch operations');
 assert.doesNotMatch(payment, /워터마크 제거/, 'pricing copy must not advertise missing watermark-removal feature');
 
 // WORK-04 / WORK-05: split/image multi-output ZIP UX.
