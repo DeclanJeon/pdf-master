@@ -30,6 +30,10 @@ server {
     index index.html;
     client_max_body_size 50m;
 
+    # Health/readiness probes (no /api/ prefix)
+    location = /healthz { proxy_pass http://127.0.0.1:3001; }
+    location = /readyz  { proxy_pass http://127.0.0.1:3001; }
+
     # API proxy → Docker container
     location /api/ {
         proxy_pass http://127.0.0.1:3001;

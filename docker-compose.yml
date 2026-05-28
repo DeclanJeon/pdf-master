@@ -13,22 +13,25 @@ services:
       HWPX2HTML_PATH: /app/server/hwpx2html.py
       MD2HTML_PATH: /app/scripts/md2html.py
       RHWP_PATH: rhwp
+      RHWP_INGEST_EXPORTER_PATH: ${RHWP_INGEST_EXPORTER_PATH:-rhwp-ingest-exporter}
       PDFTOTEXT_PATH: pdftotext
+      PDFTOHTML_PATH: pdftohtml
+      PDFTOPPM_PATH: ${PDFTOPPM_PATH:-pdftoppm}
       QPDF_PATH: qpdf
       GHOSTSCRIPT_PATH: gs
 
       # Google OAuth/session config expected by WORK-01 server implementation
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3001}
-      APP_URL: ${APP_URL:-http://localhost:3001}
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://pdfm.ponslink.com}
+      APP_URL: ${APP_URL:-https://pdfm.ponslink.com}
+      FRONTEND_URL: ${FRONTEND_URL:-https://pdfm.ponslink.com}
+      CORS_ORIGIN: ${CORS_ORIGIN:-https://pdfm.ponslink.com}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-http://localhost:3001/api/auth/callback}
+      GOOGLE_REDIRECT_URI: ${GOOGLE_REDIRECT_URI:-https://pdfm.ponslink.com/api/auth/callback}
       SESSION_SECRET: ${SESSION_SECRET:-change-me-in-production}
       SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-pdfm_session}
       SESSION_TTL_MS: ${SESSION_TTL_MS:-2592000000}
-      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
       AUTH_STORE_PATH: ${AUTH_STORE_PATH:-/app/data/auth-store.json}
 
       # Polar.sh checkout/webhook config expected by WORK-02/WORK-03 payment flow
@@ -39,8 +42,8 @@ services:
       POLAR_CHECKOUT_CURRENCY: ${POLAR_CHECKOUT_CURRENCY:-krw}
       POLAR_ONE_TIME_CHECKOUT_URL: ${POLAR_ONE_TIME_CHECKOUT_URL:-https://buy.polar.sh/polar_cl_aGzorRvqZUgPJEt53EUCH6VZcuSyjV1hOrjBQ473ZZp}
       POLAR_MONTHLY_CHECKOUT_URL: ${POLAR_MONTHLY_CHECKOUT_URL:-https://buy.polar.sh/polar_cl_FFPmuDyi5Tp6g3NXSZWDenTjVJT2HYSN2UQu90uqaio}
-      POLAR_CHECKOUT_SUCCESS_URL: ${POLAR_CHECKOUT_SUCCESS_URL:-http://localhost:5173/pricing?success=true}
-      POLAR_CHECKOUT_CANCEL_URL: ${POLAR_CHECKOUT_CANCEL_URL:-http://localhost:5173/pricing?canceled=true}
+      POLAR_CHECKOUT_SUCCESS_URL: ${POLAR_CHECKOUT_SUCCESS_URL:-https://pdfm.ponslink.com/pricing?success=true}
+      POLAR_CHECKOUT_CANCEL_URL: ${POLAR_CHECKOUT_CANCEL_URL:-https://pdfm.ponslink.com/pricing?canceled=true}
 
       # Admin/operations config for WORK-14
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
