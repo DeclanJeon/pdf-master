@@ -367,6 +367,95 @@ export async function applyMasking(
   } = {}
 ): Promise<{ pdfBytes: Uint8Array; maskedCount: number }> {
   const { style = 'replace' } = options
+  if (typeof document === 'undefined') {
+    return applyMaskingOverlayForNonBrowserTests(pdfBytes, detected, options)
+  }
+
+  const pdfjsLib = await import('pdfjs-dist')
+  configurePdfWorker(pdfjsLib)
+
+  // SECURITY: Do not draw masks as editable PDF overlays on top of the
+  // original text stream. Hidden text remains selectable/copyable. Instead,
+  // render each page to a canvas, apply the mask on the pixels, and create a
+  // new image-only PDF. The output has no original text layer to drag/search.
+  const sourcePdf = await pdfjsLib.getDocument({ data: pdfBytes.slice() }).promise
+  const outputPdf = await PDFDocument.create()
+  const itemsByPage = groupDetectionsByPage(detected)
+  const renderScale = 2
+  let maskedCount = 0
+
+  for (let pageNumber = 1; pageNumber <= sourcePdf.numPages; pageNumber++) {
+    const sourcePage = await sourcePdf.getPage(pageNumber)
+    const viewport = sourcePage.getViewport({ scale: renderScale })
+    const pageWidth = viewport.width / renderScale
+    const pageHeight = viewport.height / renderScale
+
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.ceil(viewport.width)
+    canvas.height = Math.ceil(viewport.height)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error('Canvas 2D context를 생성할 수 없습니다.')
+
+    await sourcePage.render({ canvas, canvasContext: ctx, viewport }).promise
+
+    const pageItems = itemsByPage.get(pageNumber - 1) || []
+    for (const item of pageItems) {
+      drawRasterMask(ctx, item, pageHeight, renderScale, style)
+      maskedCount++
+    }
+
+    const pngImage = await outputPdf.embedPng(canvas.toDataURL('image/png'))
+    const outputPage = outputPdf.addPage([pageWidth, pageHeight])
+    outputPage.drawImage(pngImage, { x: 0, y: 0, width: pageWidth, height: pageHeight })
+  }
+
+  const saved = await outputPdf.save()
+  return { pdfBytes: new Uint8Array(saved), maskedCount }
+}
+
+function groupDetectionsByPage(detected: DetectedInfo[]): Map<number, DetectedInfo[]> {
+  const byPage = new Map<number, DetectedInfo[]>()
+  for (const item of detected) {
+    if (!byPage.has(item.pageIndex)) byPage.set(item.pageIndex, [])
+    byPage.get(item.pageIndex)!.push(item)
+  }
+  return byPage
+}
+
+function drawRasterMask(
+  ctx: CanvasRenderingContext2D,
+  item: DetectedInfo,
+  pageHeight: number,
+  scale: number,
+  style: 'box' | 'replace'
+) {
+  const pad = 2
+  const rectX = (item.x - pad) * scale
+  const rectY = (pageHeight - (item.y + item.height + pad)) * scale
+  const rectWidth = (item.width + pad * 2) * scale
+  const rectHeight = (item.height + pad * 2) * scale
+
+  ctx.fillStyle = style === 'box' ? '#000000' : '#ffffff'
+  ctx.fillRect(rectX, rectY, rectWidth, rectHeight)
+
+  if (style === 'replace') {
+    const fontSize = item.height * 0.85 * scale
+    ctx.fillStyle = '#000000'
+    ctx.font = `${fontSize}px Arial, sans-serif`
+    ctx.textBaseline = 'alphabetic'
+    ctx.fillText(item.maskedText, item.x * scale, (pageHeight - item.y) * scale)
+  }
+}
+
+async function applyMaskingOverlayForNonBrowserTests(
+  pdfBytes: Uint8Array,
+  detected: DetectedInfo[],
+  options: {
+    fillColor?: [number, number, number]
+    style?: 'box' | 'replace'
+  } = {}
+): Promise<{ pdfBytes: Uint8Array; maskedCount: number }> {
+  const { style = 'replace' } = options
   const pdfDoc = await PDFDocument.load(pdfBytes)
   const pages = pdfDoc.getPages()
 
@@ -377,14 +466,10 @@ export async function applyMasking(
     if (item.pageIndex >= pages.length) continue
     const page = pages[item.pageIndex]
 
-    // pdfjs-dist textContent transform coordinates are already in the PDF
-    // bottom-left coordinate system used by pdf-lib. Do NOT flip Y here.
-    // Flipping with `pageHeight - y - height` masks the mirrored vertical
-    // position (e.g. y=700 text becomes y≈78 on a 792pt page).
     const x = item.x
     const y = item.y
     const width = item.width
-    const h = item.height + 4 // 여유분
+    const h = item.height + 4
 
     if (style === 'box') {
       page.drawRectangle({
@@ -400,7 +485,7 @@ export async function applyMasking(
         y: y - 2,
         width: width + 4,
         height: h,
-        color: rgb(1, 1, 1), // 흰 박스로 덮고
+        color: rgb(1, 1, 1),
       })
       page.drawText(item.maskedText, {
         x,
