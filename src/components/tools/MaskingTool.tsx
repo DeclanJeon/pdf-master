@@ -39,7 +39,8 @@ export function MaskingTool() {
     setFile(f)
     const buffer = await f.arrayBuffer()
     const bytes = new Uint8Array(buffer)
-    setPdfBytes(bytes)
+    // pdfjs-dist worker에 전송하면 ArrayBuffer가 detached되므로 masking용 복사본 보존
+    setPdfBytes(new Uint8Array(bytes))
 
     // 미리보기: 텍스트에서 감지
     try {
