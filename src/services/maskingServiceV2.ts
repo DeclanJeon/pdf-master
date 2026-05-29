@@ -376,10 +376,13 @@ export async function applyMasking(
   for (const item of detected) {
     if (item.pageIndex >= pages.length) continue
     const page = pages[item.pageIndex]
-    const { height: pageHeight } = page.getSize()
 
+    // pdfjs-dist textContent transform coordinates are already in the PDF
+    // bottom-left coordinate system used by pdf-lib. Do NOT flip Y here.
+    // Flipping with `pageHeight - y - height` masks the mirrored vertical
+    // position (e.g. y=700 text becomes y≈78 on a 792pt page).
     const x = item.x
-    const y = pageHeight - item.y - item.height // PDF 좌표계 변환
+    const y = item.y
     const width = item.width
     const h = item.height + 4 // 여유분
 

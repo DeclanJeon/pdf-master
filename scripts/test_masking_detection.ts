@@ -1,4 +1,7 @@
-import { detectInfoFromPositions, previewMasking } from '../src/services/maskingServiceV2.ts'
+import { execFileSync } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
+import { PDFDocument, StandardFonts } from 'pdf-lib'
+import { applyMasking, detectInfoFromPositions, previewMasking } from '../src/services/maskingServiceV2.ts'
 
 function expectEqual<T>(actual: T, expected: T, message: string) {
   if (JSON.stringify(actual) !== JSON.stringify(expected)) {
@@ -53,3 +56,43 @@ const positionedDate = detectInfoFromPositions(new Map([[0, makeItems('발급일
 expect(!positionedDate.some(item => item.type === 'account'), 'positioned detection does not treat date/time as account')
 
 console.log('masking detection regression tests passed')
+
+async function testMaskingCoordinates() {
+  const pdfDoc = await PDFDocument.create()
+  const page = pdfDoc.addPage([612, 792])
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
+  page.drawText('RRN: 900101-1234567', { x: 80, y: 700, size: 14, font })
+
+  const originalBytes = await pdfDoc.save()
+  const detected = [{
+    type: 'rrn' as const,
+    text: '900101-1234567',
+    maskedText: '900101-1******',
+    pageIndex: 0,
+    x: 80,
+    y: 700,
+    width: 144,
+    height: 14,
+  }]
+  const result = await applyMasking(new Uint8Array(originalBytes), detected, { style: 'box' })
+  writeFileSync('/tmp/masking-coordinate-regression.pdf', result.pdfBytes)
+
+  execFileSync('pdftoppm', ['-png', '-r', '72', '/tmp/masking-coordinate-regression.pdf', '/tmp/masking-coordinate-regression'])
+  execFileSync('python3', ['-c', `
+from PIL import Image
+img = Image.open('/tmp/masking-coordinate-regression-1.png').convert('RGB')
+# PDF y=700 on a 792pt page should render near image y≈80 from the top.
+# If the old flipped coordinate is used, the black box appears near y≈700 instead.
+top_pixel = img.getpixel((85, 84))
+bottom_pixel = img.getpixel((85, 705))
+def is_black(p): return max(p) < 40
+def is_white(p): return min(p) > 220
+if not is_black(top_pixel):
+    raise SystemExit(f'expected black mask near original text at top coordinate, got {top_pixel}')
+if not is_white(bottom_pixel):
+    raise SystemExit(f'expected no mirrored mask near bottom coordinate, got {bottom_pixel}')
+`])
+}
+
+await testMaskingCoordinates()
+console.log('masking coordinate regression tests passed')
