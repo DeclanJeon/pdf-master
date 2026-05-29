@@ -58,6 +58,13 @@ expect(!positionedDate.some(item => item.type === 'account'), 'positioned detect
 console.log('masking detection regression tests passed')
 
 async function testMaskingCoordinates() {
+  try {
+    execFileSync('pdftoppm', ['-h'], { stdio: 'ignore' })
+  } catch {
+    console.log('masking coordinate regression tests skipped: pdftoppm not available')
+    return
+  }
+
   const pdfDoc = await PDFDocument.create()
   const page = pdfDoc.addPage([612, 792])
   const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
