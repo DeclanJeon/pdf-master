@@ -69,7 +69,7 @@ function configurePdfWorker(pdfjsLib: typeof import('pdfjs-dist')) {
     'pdfjs-dist/build/pdf.worker.min.mjs',
     import.meta.url
   )
-  url.searchParams.set('v', '1') // cache busting
+  url.searchParams.set('v', '3') // cache busting
   pdfjsLib.GlobalWorkerOptions.workerSrc = url.toString()
 }
 
@@ -79,7 +79,12 @@ function configurePdfWorker(pdfjsLib: typeof import('pdfjs-dist')) {
 export async function extractTextPositions(pdfBytes: Uint8Array): Promise<Map<number, TextItem[]>> {
   const pdfjsLib = await import('pdfjs-dist')
   configurePdfWorker(pdfjsLib)
-  const pdf = await pdfjsLib.getDocument({ data: pdfBytes }).promise
+
+  // pdfjs-dist transfers the ArrayBuffer to its worker. Passing the caller's
+  // Uint8Array directly detaches it, which later breaks pdf-lib with
+  // "No PDF header found". Always hand pdf.js an isolated copy.
+  const pdfJsBytes = pdfBytes.slice()
+  const pdf = await pdfjsLib.getDocument({ data: pdfJsBytes }).promise
   const textMap = new Map<number, TextItem[]>()
 
   for (let i = 1; i <= pdf.numPages; i++) {
