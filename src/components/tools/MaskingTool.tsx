@@ -79,7 +79,8 @@ export function MaskingTool() {
       setStep('done')
       toast.success(`${result.maskedCount}개의 개인정보를 마스킹했습니다.`)
     } catch (e) {
-      toast.error('마스킹 처리 중 오류가 발생했습니다.')
+      console.error('[MaskingTool] maskPdfPersonalInfo failed:', e)
+      toast.error(`마스킹 처리 중 오류가 발생했습니다: ${e instanceof Error ? e.message : String(e)}`)
       setStep('preview')
     }
   }
