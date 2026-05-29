@@ -65,10 +65,12 @@ const TYPE_PRIORITY: Record<string, number> = {
 
 function configurePdfWorker(pdfjsLib: typeof import('pdfjs-dist')) {
   // Keep PDF processing local and avoid a runtime dependency on the cdnjs worker.
-  pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
+  const url = new URL(
     'pdfjs-dist/build/pdf.worker.min.mjs',
     import.meta.url
-  ).toString()
+  )
+  url.searchParams.set('v', '1') // cache busting
+  pdfjsLib.GlobalWorkerOptions.workerSrc = url.toString()
 }
 
 /**
