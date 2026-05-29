@@ -17,6 +17,9 @@ const app = express();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 3001;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+const DOMAIN = process.env.DOMAIN || 'pdfm.ponslink.com';
+const PROD_URL = `https://${DOMAIN}`;
+const DEV_FRONTEND_URL = 'http://localhost:5173';
 
 // --- Config ---
 const HWPFORGE_PATH = process.env.HWPFORGE_PATH || path.resolve(__dirname, '../../pdf-master-references/HwpForge/target/release/hwpforge');
@@ -55,11 +58,12 @@ const OAUTH_REDIRECT_COOKIE_NAME = 'pdfm_oauth_redirect';
 const SESSION_TTL_MS = Number(process.env.SESSION_TTL_MS || 30 * 24 * 60 * 60 * 1000);
 const SESSION_SECRET = process.env.SESSION_SECRET || (IS_PRODUCTION ? '' : crypto.randomBytes(32).toString('hex'));
 const COOKIE_SECURE = process.env.COOKIE_SECURE === 'true' || IS_PRODUCTION;
-const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || process.env.APP_URL || '';
-const FRONTEND_URL = process.env.FRONTEND_URL || '';
+// URLs: env var가 설정되어 있으면 우선 사용, 없으면 NODE_ENV에 따라 자동 파생
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL || process.env.APP_URL || (IS_PRODUCTION ? PROD_URL : `http://localhost:${PORT}`);
+const FRONTEND_URL = process.env.FRONTEND_URL || (IS_PRODUCTION ? PROD_URL : DEV_FRONTEND_URL);
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
-const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || '';
+const GOOGLE_REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI || `${PUBLIC_BASE_URL}/api/auth/callback`;
 const POLAR_ACCESS_TOKEN = process.env.POLAR_ACCESS_TOKEN || '';
 const POLAR_WEBHOOK_SECRET = process.env.POLAR_WEBHOOK_SECRET || '';
 const POLAR_ONE_TIME_PRODUCT_ID = process.env.POLAR_ONE_TIME_PRODUCT_ID || process.env.POLAR_PRODUCT_ID || '';
@@ -67,8 +71,8 @@ const POLAR_MONTHLY_PRODUCT_ID = process.env.POLAR_MONTHLY_PRODUCT_ID || process
 const POLAR_CHECKOUT_CURRENCY = (process.env.POLAR_CHECKOUT_CURRENCY || 'krw').toLowerCase();
 const POLAR_ONE_TIME_CHECKOUT_URL = process.env.POLAR_ONE_TIME_CHECKOUT_URL || '';
 const POLAR_MONTHLY_CHECKOUT_URL = process.env.POLAR_MONTHLY_CHECKOUT_URL || '';
-const POLAR_CHECKOUT_SUCCESS_URL = process.env.POLAR_CHECKOUT_SUCCESS_URL || '';
-const POLAR_CHECKOUT_CANCEL_URL = process.env.POLAR_CHECKOUT_CANCEL_URL || '';
+const POLAR_CHECKOUT_SUCCESS_URL = process.env.POLAR_CHECKOUT_SUCCESS_URL || `${FRONTEND_URL}/pricing?success=true`;
+const POLAR_CHECKOUT_CANCEL_URL = process.env.POLAR_CHECKOUT_CANCEL_URL || `${FRONTEND_URL}/pricing?canceled=true`;
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '').split(',').map((email) => normalizeEmail(email)).filter(Boolean);
 const ADMIN_AUDIT_LOG_PATH = process.env.ADMIN_AUDIT_LOG_PATH || path.resolve(__dirname, '../data/admin-audit.log');
 const CORS_ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || FRONTEND_URL)

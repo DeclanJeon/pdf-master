@@ -1,0 +1,116 @@
+# =============================================================================
+# PonsLink Server — Full Docker Stack
+# =============================================================================
+# Replaces all PM2/systemd services with Docker containers.
+# nginx stays on host; all backends use network_mode: host for zero-config migration.
+#
+# Quick start:
+#   ./dc-up.sh        — build & start all services
+#   ./dc-down.sh      — stop all services
+#   ./dc-status.sh    — health check overview
+#
+# Data migration (first run only):
+#   ./migrate.sh      — dump existing PostgreSQL, stop systemd services, start Docker
+# =============================================================================
+
+services:
+  # ── PostgreSQL 16 (ponswarp DB) ──────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    network_mode: host
+    environment:
+      POSTGRES_USER: ponswarp
+      POSTGRES_DB: ponswarp
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?run setup-env.sh first}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ponswarp -d ponswarp"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ── Redis 7 ──────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    network_mode: host
+    command: >
+      redis-server
+      --appendonly yes
+      --save 60 1
+      --save 300 10
+      --loglevel notice
+    volumes:
+      - redisdata:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # ── Coturn STUN/TURN ─────────────────────────────────────────────────────
+  coturn:
+    image: coturn/coturn:4.6-alpine
+    network_mode: host
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+      - /etc/coturn-certs/fullchain.pem:/etc/coturn-certs/fullchain.pem:ro
+      - /etc/coturn-certs/privkey.pem:/etc/coturn-certs/privkey.pem:ro
+    restart: unless-stopped
+
+  # ── ponslink-api (Node.js) ───────────────────────────────────────────────
+  ponslink-api:
+    build:
+      context: /home/declan/ponslink/api-infra
+      dockerfile: Dockerfile
+    image: ponslink-api:latest
+    network_mode: host
+    env_file:
+      - /home/declan/ponslink/api-infra/.env
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  # ── pdf-master-api (Node.js + LibreOffice + HWP tools) ───────────────────
+  pdf-master-api:
+    build:
+      context: /home/declan/pdf-master
+      dockerfile: Dockerfile
+    image: pdf-master-api:latest
+    network_mode: host
+    env_file:
+      - /home/declan/pdf-master/.env
+    volumes:
+      - hwpforge-bin:/app/bin
+      - pdfmaster-data:/app/data
+    restart: unless-stopped
+
+  # ── ponswarp-signaling (Rust) ────────────────────────────────────────────
+  ponswarp-signaling:
+    build:
+      context: /home/declan/ponswarp
+      dockerfile: /home/declan/docker/ponswarp.Dockerfile
+    image: ponswarp-signaling:latest
+    network_mode: host
+    env_file:
+      - /home/declan/ponswarp/env/.env
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+# ── Persistent Volumes ─────────────────────────────────────────────────────
+volumes:
+  pgdata:
+    name: ponslink_pgdata
+  redisdata:
+    name: ponslink_redisdata
+  hwpforge-bin:
+    name: ponslink_hwpforge_bin
+  pdfmaster-data:
+    name: ponslink_pdfmaster_data
