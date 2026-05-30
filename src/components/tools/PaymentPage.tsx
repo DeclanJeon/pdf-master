@@ -55,7 +55,6 @@ const FEATURES: Feature[] = [
   { name: 'PDF 암호 설정/해제',   free: false, perUse: true,  monthly: true },
   { name: '하루 사용 제한',       free: '3건', perUse: '없음', monthly: '없음' },
   { name: '파일 보관',           free: '10분', perUse: '10분', monthly: '10분' },
-  { name: '광고 없음',           free: false, perUse: true,  monthly: true },
   { name: '우선 처리',           free: false, perUse: false, monthly: true },
 ]
 
@@ -304,7 +303,7 @@ export default function PaymentPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <ul className="space-y-2.5">
-              {['무료 플랜의 모든 기능', 'PDF → HWP 변환 1회', 'PDF 암호 설정/해제 1회', '구매 즉시 1회 이용권 지급', '광고 없음'].map((f) => (
+              {['무료 플랜의 모든 기능', 'PDF → HWP 변환 1회', 'PDF 암호 설정/해제 1회', '구매 즉시 1회 이용권 지급'].map((f) => (
                 <li key={f} className="flex items-center gap-2 text-sm">
                   <CheckCircle2 className="w-4 h-4 text-blue-500 flex-shrink-0" />
                   <span>{f}</span>
@@ -339,7 +338,7 @@ export default function PaymentPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <ul className="space-y-2.5">
-              {['건당 결제의 모든 기능', '무제한 변환/편집', '우선 처리 속도', '광고 없음', '새 기능 우선 체험'].map((f) => (
+              {['건당 결제의 모든 기능', '무제한 변환/편집', '우선 처리 속도', '새 기능 우선 체험'].map((f) => (
                 <li key={f} className="flex items-center gap-2 text-sm">
                   <CheckCircle2 className="w-4 h-4 text-red-500 flex-shrink-0" />
                   <span>{f}</span>
