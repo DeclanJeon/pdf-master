@@ -6,7 +6,7 @@ import path from 'path';
 import fs from 'fs';
 import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import crypto from 'crypto';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -48,6 +48,8 @@ const PDF_HWP_PRIMARY_PIPELINE = process.env.PDF_HWP_PRIMARY_PIPELINE || 'pdf2do
 const QPDF_PATH = process.env.QPDF_PATH || 'qpdf';
 const GHOSTSCRIPT_PATH = process.env.GHOSTSCRIPT_PATH || process.env.GS_PATH || 'gs';
 const IMAGEMAGICK_PATH = process.env.IMAGEMAGICK_PATH || process.env.MAGICK_PATH || 'magick';
+const CHROME_PATH = process.env.CHROME_PATH || process.env.CHROMIUM_PATH || (fs.existsSync('/home/declan/.local/bin/google-chrome') ? '/home/declan/.local/bin/google-chrome' : 'google-chrome');
+const PDFUNITE_PATH = process.env.PDFUNITE_PATH || 'pdfunite';
 const LOCAL_PDF2DOCX_PYTHON_PATH = path.resolve(__dirname, '../.venv-pdf2docx/bin/python');
 const PYTHON_PATH = process.env.PYTHON_PATH
   || (fs.existsSync(LOCAL_PDF2DOCX_PYTHON_PATH) ? LOCAL_PDF2DOCX_PYTHON_PATH : 'python3');
@@ -583,6 +585,108 @@ function commandAvailable(command: string, args: string[] = ['--version']): bool
     return true;
   } catch {
     return false;
+  }
+}
+
+function materializeSvgDataUriImages(svgPath: string, assetDir: string): string {
+  const svg = fs.readFileSync(svgPath, 'utf8');
+  const dataUriPattern = /\b((?:xlink:)?href)=(['"])data:image\/(png|jpe?g|gif|webp);base64,([^'"]+)\2/gi;
+  let imageIndex = 0;
+  let replaced = false;
+
+  const rewrittenSvg = svg.replace(dataUriPattern, (_match, attrName: string, quote: string, ext: string, base64Data: string) => {
+    fs.mkdirSync(assetDir, { recursive: true });
+    const normalizedExt = ext.toLowerCase() === 'jpeg' ? 'jpg' : ext.toLowerCase();
+    const imageBuffer = Buffer.from(base64Data.replace(/\s+/g, ''), 'base64');
+    const imagePath = path.join(assetDir, `image_${String(++imageIndex).padStart(3, '0')}.${normalizedExt}`);
+    fs.writeFileSync(imagePath, imageBuffer);
+    replaced = true;
+    return `${attrName}=${quote}${imagePath}${quote}`;
+  });
+
+  if (!replaced) return svgPath;
+
+  const sanitizedSvgPath = path.join(assetDir, path.basename(svgPath));
+  fs.writeFileSync(sanitizedSvgPath, rewrittenSvg, 'utf8');
+  return sanitizedSvgPath;
+}
+
+function getSvgDimensions(svgPath: string): { width: number; height: number } {
+  const svg = fs.readFileSync(svgPath, 'utf8');
+  const widthMatch = svg.match(/<svg[^>]*\bwidth="([0-9.]+)(?:px)?"/i);
+  const heightMatch = svg.match(/<svg[^>]*\bheight="([0-9.]+)(?:px)?"/i);
+  if (widthMatch && heightMatch) {
+    return { width: Number(widthMatch[1]), height: Number(heightMatch[1]) };
+  }
+  const viewBoxMatch = svg.match(/<svg[^>]*\bviewBox="\s*[-0-9.]+\s+[-0-9.]+\s+([0-9.]+)\s+([0-9.]+)\s*"/i);
+  if (viewBoxMatch) {
+    return { width: Number(viewBoxMatch[1]), height: Number(viewBoxMatch[2]) };
+  }
+  return { width: 793.7066666666667, height: 1122.5066666666667 };
+}
+
+function createSvgPrintWrapperHtml(svgPath: string, width: number, height: number): string {
+  const svgUrl = pathToFileURL(svgPath).href;
+  return `<!doctype html><html><head><meta charset="utf-8"><style>@page{size:${width}px ${height}px;margin:0}html,body{margin:0;padding:0;width:${width}px;height:${height}px;overflow:hidden}img{display:block;width:${width}px;height:${height}px}</style></head><body><img src="${svgUrl}"></body></html>`;
+}
+
+async function renderSvgPageToPdfWithChrome(svgPath: string, pagePdfPath: string, workDir: string) {
+  const { width, height } = getSvgDimensions(svgPath);
+  const wrapperPath = path.join(workDir, `${path.basename(svgPath, '.svg')}.print.html`);
+  fs.writeFileSync(wrapperPath, createSvgPrintWrapperHtml(svgPath, width, height), 'utf8');
+  await execFileAsync(CHROME_PATH, [
+    '--headless',
+    '--no-sandbox',
+    '--disable-gpu',
+    '--print-to-pdf-no-header',
+    `--print-to-pdf=${pagePdfPath}`,
+    pathToFileURL(wrapperPath).href,
+  ], { timeout: 60000 });
+  if (!fs.existsSync(pagePdfPath) || fs.statSync(pagePdfPath).size === 0) {
+    throw new Error(`Chrome SVG→PDF 변환 결과를 찾을 수 없습니다: ${path.basename(svgPath)}`);
+  }
+}
+
+async function convertHwpToPdfWithRhwpSvg(inputPath: string, jobDir: string, outputPath: string) {
+  const svgDir = path.join(jobDir, 'rhwp-svg');
+  const pagePdfDir = path.join(jobDir, 'rhwp-page-pdf');
+  fs.mkdirSync(svgDir, { recursive: true });
+  fs.mkdirSync(pagePdfDir, { recursive: true });
+
+  await execFileAsync(RHWP_PATH, ['export-svg', inputPath, '-o', svgDir, '--font-style'], {
+    timeout: 120000,
+    env: { ...process.env, LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8' },
+  });
+
+  const svgFiles = fs.readdirSync(svgDir)
+    .filter((name) => name.toLowerCase().endsWith('.svg'))
+    .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+    .map((name) => path.join(svgDir, name));
+
+  if (svgFiles.length === 0) {
+    throw new Error('rhwp SVG 렌더링 결과를 찾을 수 없습니다.');
+  }
+
+  const pagePdfPaths: string[] = [];
+  for (const [index, svgPath] of svgFiles.entries()) {
+    const pagePdfPath = path.join(pagePdfDir, `page_${String(index + 1).padStart(3, '0')}.pdf`);
+    const svgAssetDir = path.join(pagePdfDir, `page_${String(index + 1).padStart(3, '0')}_assets`);
+    const renderableSvgPath = materializeSvgDataUriImages(svgPath, svgAssetDir);
+    try {
+      await renderSvgPageToPdfWithChrome(svgPath, pagePdfPath, svgAssetDir);
+    } catch (chromeErr) {
+      console.warn(`[METHOD2] Chrome SVG→PDF failed for ${path.basename(svgPath)}: ${chromeErr instanceof Error ? chromeErr.message : chromeErr}; falling back to ImageMagick`);
+      await execFileAsync(IMAGEMAGICK_PATH, ['-density', '96', renderableSvgPath, pagePdfPath], { timeout: 60000 });
+    }
+    if (!fs.existsSync(pagePdfPath) || fs.statSync(pagePdfPath).size === 0) {
+      throw new Error(`ImageMagick SVG→PDF 변환 결과를 찾을 수 없습니다: ${path.basename(svgPath)}`);
+    }
+    pagePdfPaths.push(pagePdfPath);
+  }
+
+  await execFileAsync(PDFUNITE_PATH, [...pagePdfPaths, outputPath], { timeout: 120000 });
+  if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) {
+    throw new Error('pdfunite 병합 PDF 생성에 실패했습니다.');
   }
 }
 
@@ -2624,7 +2728,30 @@ app.post('/api/convert/hwp-to-pdf', upload.single('file'), async (req: Request, 
         }
       }
 
-      // === Method 2 (fallback): HWP→HWPX→HTML→PDF ===
+      if (!isHwpx) {
+        job.progress = 20;
+        jobs.set(jobId, { ...job });
+
+        try {
+          console.log(`[METHOD2] Trying rhwp SVG HWP→PDF jobId=${jobId}`);
+          await convertHwpToPdfWithRhwpSvg(inputPath, jobDir, pdfPath);
+          try {
+            fs.unlinkSync(inputPath);
+          } catch (cleanupErr) {
+            console.warn(`[METHOD2] input cleanup failed: ${cleanupErr instanceof Error ? cleanupErr.message : cleanupErr}`);
+          }
+          job.status = 'completed';
+          job.progress = 100;
+          job.resultUrl = `/api/download/${jobId}`;
+          jobs.set(jobId, job);
+          console.log(`[METHOD2 OK] rhwp SVG HWP→PDF jobId=${jobId} file=${originalName}`);
+          return;
+        } catch (e) {
+          console.log(`[METHOD2 FAIL] ${e instanceof Error ? e.message : 'unknown'}, falling back to HWPX/HTML`);
+        }
+      }
+
+
       // Step 1: HWP5 → HWPX (skip if already HWPX)
       job.progress = 20;
       jobs.set(jobId, { ...job });
@@ -3148,6 +3275,8 @@ function dependencyStatus() {
     pdftohtml: commandAvailable(PDFTOHTML_PATH, ['-v']),
     pdftoppm: commandAvailable(PDFTOPPM_PATH, ['-h']),
     imagemagick: commandAvailable(IMAGEMAGICK_PATH, ['-version']),
+    chrome: commandAvailable(CHROME_PATH, ['--version']),
+    pdfunite: commandAvailable(PDFUNITE_PATH, ['-v']),
     pythonPillow: commandAvailable(PYTHON_PATH, ['-c', 'import PIL']),
     pythonPyMuPDF: commandAvailable(PYTHON_PATH, ['-c', 'import fitz']),
     pdf2docx: commandAvailable(PYTHON_PATH, ['-c', 'import pdf2docx']),
@@ -3201,6 +3330,8 @@ app.listen(PORT, () => {
   console.log(`  pdftohtml: ${PDFTOHTML_PATH} (${commandAvailable(PDFTOHTML_PATH, ['-v']) ? 'OK' : 'MISSING'})`);
   console.log(`  pdftoppm: ${PDFTOPPM_PATH} (${commandAvailable(PDFTOPPM_PATH, ['-h']) ? 'OK' : 'MISSING'})`);
   console.log(`  imagemagick: ${IMAGEMAGICK_PATH} (${commandAvailable(IMAGEMAGICK_PATH, ['-version']) ? 'OK' : 'MISSING'})`);
+  console.log(`  chrome: ${CHROME_PATH} (${commandAvailable(CHROME_PATH, ['--version']) ? 'OK' : 'MISSING'})`);
+  console.log(`  pdfunite: ${PDFUNITE_PATH} (${commandAvailable(PDFUNITE_PATH, ['-v']) ? 'OK' : 'MISSING'})`);
   console.log(`  python-pillow: ${PYTHON_PATH} (${commandAvailable(PYTHON_PATH, ['-c', 'import PIL']) ? 'OK' : 'MISSING'})`);
   console.log(`  python-pymupdf: ${PYTHON_PATH} (${commandAvailable(PYTHON_PATH, ['-c', 'import fitz']) ? 'OK' : 'MISSING'})`);
   console.log(`  pdf2docx: ${PYTHON_PATH} (${commandAvailable(PYTHON_PATH, ['-c', 'import pdf2docx']) ? 'OK' : 'MISSING'})`);
