@@ -685,8 +685,27 @@ function getSvgDimensions(svgPath: string): { width: number; height: number } {
 }
 
 function createSvgPrintWrapperHtml(svgPath: string, width: number, height: number): string {
-  const svgUrl = pathToFileURL(svgPath).href;
-  return `<!doctype html><html><head><meta charset="utf-8"><style>@page{size:${width}px ${height}px;margin:0}html,body{margin:0;padding:0;width:${width}px;height:${height}px;overflow:hidden}img{display:block;width:${width}px;height:${height}px}</style></head><body><img src="${svgUrl}"></body></html>`;
+  const rawSvg = fs.readFileSync(svgPath, 'utf8');
+  const inlineSvg = rawSvg.replace(/<svg\b/i, `<svg style="display:block;width:${width}px;height:${height}px"`);
+  return `<!doctype html><html><head><meta charset="utf-8"><style>@page{size:${width}px ${height}px;margin:0}html,body{margin:0;padding:0;width:${width}px;height:${height}px;overflow:hidden}svg{display:block;width:${width}px!important;height:${height}px!important}</style></head><body>${inlineSvg}</body></html>`;
+}
+
+function countSvgTextElements(svgPath: string): number {
+  const svg = fs.readFileSync(svgPath, 'utf8');
+  return (svg.match(/<text\b/gi) || []).length;
+}
+
+function countPdfExtractableTextChars(pdfPath: string): number | null {
+  try {
+    const stdout = execFileSync(PDFTOTEXT_PATH, ['-layout', pdfPath, '-'], {
+      encoding: 'utf8',
+      timeout: 30000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    return stdout.replace(/\s+/g, '').length;
+  } catch {
+    return null;
+  }
 }
 
 async function renderSvgPageToPdfWithChrome(svgPath: string, pagePdfPath: string, workDir: string) {
@@ -726,13 +745,15 @@ async function convertHwpToPdfWithRhwpSvg(inputPath: string, jobDir: string, out
     throw new Error('rhwp SVG 렌더링 결과를 찾을 수 없습니다.');
   }
 
+  const sourceSvgTextElementCount = svgFiles.reduce((sum, svgPath) => sum + countSvgTextElements(svgPath), 0);
+
   const pagePdfPaths: string[] = [];
   for (const [index, svgPath] of svgFiles.entries()) {
     const pagePdfPath = path.join(pagePdfDir, `page_${String(index + 1).padStart(3, '0')}.pdf`);
     const svgAssetDir = path.join(pagePdfDir, `page_${String(index + 1).padStart(3, '0')}_assets`);
     const renderableSvgPath = materializeSvgDataUriImages(svgPath, svgAssetDir);
     try {
-      await renderSvgPageToPdfWithChrome(svgPath, pagePdfPath, svgAssetDir);
+      await renderSvgPageToPdfWithChrome(renderableSvgPath, pagePdfPath, svgAssetDir);
     } catch (chromeErr) {
       console.warn(`[METHOD2] Chrome SVG→PDF failed for ${path.basename(svgPath)}: ${chromeErr instanceof Error ? chromeErr.message : chromeErr}; falling back to ImageMagick`);
       await execFileAsync(IMAGEMAGICK_PATH, ['-density', '96', renderableSvgPath, pagePdfPath], { timeout: 60000 });
@@ -746,6 +767,13 @@ async function convertHwpToPdfWithRhwpSvg(inputPath: string, jobDir: string, out
   await execFileAsync(PDFUNITE_PATH, [...pagePdfPaths, outputPath], { timeout: 120000 });
   if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) {
     throw new Error('pdfunite 병합 PDF 생성에 실패했습니다.');
+  }
+
+  if (sourceSvgTextElementCount > 0) {
+    const textCharCount = countPdfExtractableTextChars(outputPath);
+    if (textCharCount !== null && textCharCount === 0) {
+      throw new Error('rhwp SVG HWP→PDF 결과가 이미지-only PDF입니다. 텍스트 PDF를 유지하기 위해 fallback을 실패 처리합니다.');
+    }
   }
 }
 
