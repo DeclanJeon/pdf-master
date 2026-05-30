@@ -21,7 +21,7 @@ assert.match(server, /app\.post\('\/api\/convert\/pdf-to-docx'/, 'server must ex
 assert.match(server, /convertPdfToDocxWithPdf2docx/, 'server endpoint must use the pdf2docx engine');
 assert.match(server, /PDF2DOCX_LAYOUT_MODE/, 'server must expose a configurable PDF→DOCX layout mode');
 assert.match(server, /--layout-mode[\s\S]*PDF2DOCX_LAYOUT_MODE/, 'server must pass the layout mode into the converter script');
-assert.match(server, /absolute/, 'PDF→DOCX should default to absolute-coordinate layout preservation for hard PDFs');
+assert.match(server, /const PDF2DOCX_MODE_CANDIDATE = process\.env\.PDF2DOCX_LAYOUT_MODE \|\| process\.env\.PDF2DOCX_MODE \|\| 'faithful';/, 'PDF→DOCX must default to faithful layout preservation; absolute mode makes Korean forms spill and misalign');
 assert.match(server, /isDocxFile/, 'server must verify generated DOCX containers');
 assert.match(server, /word\/document\.xml/, 'DOCX validation must check word/document.xml exists');
 assert.match(server, /\[Content_Types\]\.xml/, 'DOCX validation must check [Content_Types].xml exists');

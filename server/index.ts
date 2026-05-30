@@ -39,10 +39,10 @@ const PDFTOTEXT_PATH = process.env.PDFTOTEXT_PATH || 'pdftotext';
 const PDFTOHTML_PATH = process.env.PDFTOHTML_PATH || 'pdftohtml';
 const PDFTOPPM_PATH = process.env.PDFTOPPM_PATH || 'pdftoppm';
 const PDF2DOCX_SCRIPT_PATH = process.env.PDF2DOCX_SCRIPT_PATH || path.resolve(__dirname, '../scripts/pdf_to_docx.py');
-const PDF2DOCX_MODE_CANDIDATE = process.env.PDF2DOCX_LAYOUT_MODE || process.env.PDF2DOCX_MODE || 'absolute';
+const PDF2DOCX_MODE_CANDIDATE = process.env.PDF2DOCX_LAYOUT_MODE || process.env.PDF2DOCX_MODE || 'faithful';
 const PDF2DOCX_LAYOUT_MODE = ['faithful', 'editable', 'absolute'].includes(PDF2DOCX_MODE_CANDIDATE)
   ? PDF2DOCX_MODE_CANDIDATE
-  : 'absolute';
+  : 'faithful';
 const ODT_TO_HWPX_SCRIPT_PATH = process.env.ODT_TO_HWPX_SCRIPT_PATH || path.resolve(__dirname, '../scripts/odt_to_hwpx.py');
 const PDF_HWP_PRIMARY_PIPELINE = process.env.PDF_HWP_PRIMARY_PIPELINE || 'pdf2docx-docx';
 const QPDF_PATH = process.env.QPDF_PATH || 'qpdf';
