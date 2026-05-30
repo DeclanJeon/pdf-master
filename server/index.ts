@@ -50,6 +50,8 @@ const GHOSTSCRIPT_PATH = process.env.GHOSTSCRIPT_PATH || process.env.GS_PATH || 
 const IMAGEMAGICK_PATH = process.env.IMAGEMAGICK_PATH || process.env.MAGICK_PATH || 'magick';
 const CHROME_PATH = process.env.CHROME_PATH || process.env.CHROMIUM_PATH || (fs.existsSync('/home/declan/.local/bin/google-chrome') ? '/home/declan/.local/bin/google-chrome' : 'google-chrome');
 const PDFUNITE_PATH = process.env.PDFUNITE_PATH || 'pdfunite';
+const HANCOM_DOCSCONVERTER_BASE_URL = process.env.HANCOM_DOCSCONVERTER_BASE_URL || 'https://docsconverter-example.cloud.hancom.com';
+const HANCOM_DOCSCONVERTER_ENABLED = process.env.HANCOM_DOCSCONVERTER_ENABLED !== 'false';
 const LOCAL_PDF2DOCX_PYTHON_PATH = path.resolve(__dirname, '../.venv-pdf2docx/bin/python');
 const PYTHON_PATH = process.env.PYTHON_PATH
   || (fs.existsSync(LOCAL_PDF2DOCX_PYTHON_PATH) ? LOCAL_PDF2DOCX_PYTHON_PATH : 'python3');
@@ -586,6 +588,63 @@ function commandAvailable(command: string, args: string[] = ['--version']): bool
   } catch {
     return false;
   }
+}
+
+async function expectJsonResponse(response: globalThis.Response, context: string): Promise<any> {
+  const text = await response.text();
+  if (!response.ok) {
+    throw new Error(`${context} failed: HTTP ${response.status} ${text.slice(0, 300)}`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`${context} did not return JSON: ${text.slice(0, 300)}`);
+  }
+}
+
+async function convertHwpToPdfWithHancomDocsconverter(inputPath: string, outputPath: string) {
+  if (!HANCOM_DOCSCONVERTER_ENABLED) {
+    throw new Error('Hancom docsconverter is disabled by HANCOM_DOCSCONVERTER_ENABLED=false');
+  }
+
+  const baseUrl = HANCOM_DOCSCONVERTER_BASE_URL.replace(/\/$/, '');
+  const originalName = path.basename(inputPath);
+  const sourceBytes = fs.readFileSync(inputPath);
+  const form = new FormData();
+  form.append('file', new Blob([sourceBytes]), originalName);
+
+  const uploadResponse = await fetch(`${baseUrl}/rest/upload_file`, {
+    method: 'POST',
+    body: form,
+  });
+  const uploadJson = await expectJsonResponse(uploadResponse, 'Hancom docsconverter upload');
+  if (uploadJson?.code !== '0000' || !uploadJson?.upload_file_path) {
+    throw new Error(`Hancom docsconverter upload failed: ${JSON.stringify(uploadJson).slice(0, 500)}`);
+  }
+
+  const convertUrl = `${baseUrl}/hwp/doc2pdf?file_path=${encodeURIComponent(uploadJson.upload_file_path)}`;
+  const convertResponse = await fetch(convertUrl, { method: 'GET' });
+  const convertJson = await expectJsonResponse(convertResponse, 'Hancom docsconverter doc2pdf');
+  const result = convertJson?.docsconverter?.result;
+  const resourcePath = convertJson?.docsconverter?.file?.resource_file?.[0];
+  if (result?.code !== '0000' || !resourcePath) {
+    throw new Error(`Hancom docsconverter doc2pdf failed: ${JSON.stringify(convertJson).slice(0, 500)}`);
+  }
+
+  const downloadUrl = resourcePath.startsWith('http') ? resourcePath : `${baseUrl}${resourcePath}`;
+  const pdfResponse = await fetch(downloadUrl, { method: 'GET' });
+  if (!pdfResponse.ok) {
+    throw new Error(`Hancom docsconverter PDF download failed: HTTP ${pdfResponse.status}`);
+  }
+  const contentType = pdfResponse.headers.get('content-type') || '';
+  const pdfBytes = Buffer.from(await pdfResponse.arrayBuffer());
+  if (!contentType.includes('application/pdf') && !pdfBytes.subarray(0, 5).equals(Buffer.from('%PDF-'))) {
+    throw new Error(`Hancom docsconverter download was not application/pdf: ${contentType}`);
+  }
+  if (pdfBytes.length === 0) {
+    throw new Error('Hancom docsconverter returned an empty PDF');
+  }
+  fs.writeFileSync(outputPath, pdfBytes);
 }
 
 function materializeSvgDataUriImages(svgPath: string, assetDir: string): string {
@@ -2733,8 +2792,8 @@ app.post('/api/convert/hwp-to-pdf', upload.single('file'), async (req: Request, 
         jobs.set(jobId, { ...job });
 
         try {
-          console.log(`[METHOD2] Trying rhwp SVG HWP→PDF jobId=${jobId}`);
-          await convertHwpToPdfWithRhwpSvg(inputPath, jobDir, pdfPath);
+          console.log(`[METHOD2] Trying Hancom docsconverter HWP→PDF jobId=${jobId}`);
+          await convertHwpToPdfWithHancomDocsconverter(inputPath, pdfPath);
           try {
             fs.unlinkSync(inputPath);
           } catch (cleanupErr) {
@@ -2744,13 +2803,35 @@ app.post('/api/convert/hwp-to-pdf', upload.single('file'), async (req: Request, 
           job.progress = 100;
           job.resultUrl = `/api/download/${jobId}`;
           jobs.set(jobId, job);
-          console.log(`[METHOD2 OK] rhwp SVG HWP→PDF jobId=${jobId} file=${originalName}`);
+          console.log(`[METHOD2 OK] Hancom docsconverter HWP→PDF jobId=${jobId} file=${originalName}`);
           return;
         } catch (e) {
-          console.log(`[METHOD2 FAIL] ${e instanceof Error ? e.message : 'unknown'}, falling back to HWPX/HTML`);
+          console.log(`[METHOD2 FAIL] ${e instanceof Error ? e.message : 'unknown'}, falling back to rhwp SVG`);
         }
       }
 
+      if (!isHwpx) {
+        job.progress = 35;
+        jobs.set(jobId, { ...job });
+
+        try {
+          console.log(`[METHOD3] Trying rhwp SVG HWP→PDF jobId=${jobId}`);
+          await convertHwpToPdfWithRhwpSvg(inputPath, jobDir, pdfPath);
+          try {
+            fs.unlinkSync(inputPath);
+          } catch (cleanupErr) {
+            console.warn(`[METHOD3] input cleanup failed: ${cleanupErr instanceof Error ? cleanupErr.message : cleanupErr}`);
+          }
+          job.status = 'completed';
+          job.progress = 100;
+          job.resultUrl = `/api/download/${jobId}`;
+          jobs.set(jobId, job);
+          console.log(`[METHOD3 OK] rhwp SVG HWP→PDF jobId=${jobId} file=${originalName}`);
+          return;
+        } catch (e) {
+          console.log(`[METHOD3 FAIL] ${e instanceof Error ? e.message : 'unknown'}, falling back to HWPX/HTML`);
+        }
+      }
 
       // Step 1: HWP5 → HWPX (skip if already HWPX)
       job.progress = 20;
