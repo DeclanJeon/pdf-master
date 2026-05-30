@@ -22,7 +22,12 @@ const PROD_URL = `https://${DOMAIN}`;
 const DEV_FRONTEND_URL = 'http://localhost:5173';
 
 // --- Config ---
-const HWPFORGE_PATH = process.env.HWPFORGE_PATH || path.resolve(__dirname, '../../pdf-master-references/HwpForge/target/release/hwpforge');
+const LOCAL_HWPFORGE_PATH = path.resolve(__dirname, '../../pdf-master-references/HwpForge/target/release/hwpforge');
+const LEGACY_LOCAL_HWPFORGE_PATH = './pdf-master-references/HwpForge/target/release/hwpforge';
+const HWPFORGE_ENV_PATH = process.env.HWPFORGE_PATH;
+const HWPFORGE_PATH = !IS_PRODUCTION && HWPFORGE_ENV_PATH === LEGACY_LOCAL_HWPFORGE_PATH
+  ? LOCAL_HWPFORGE_PATH
+  : HWPFORGE_ENV_PATH || (IS_PRODUCTION ? '' : LOCAL_HWPFORGE_PATH);
 const SOFFICE_PATH = process.env.SOFFICE_PATH || 'soffice';
 const HWPX2HTML_PATH = process.env.HWPX2HTML_PATH || path.resolve(__dirname, 'hwpx2html.py');
 const MD2HTML_PATH = process.env.MD2HTML_PATH || path.resolve(__dirname, '../scripts/md2html.py');
