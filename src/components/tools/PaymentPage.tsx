@@ -201,7 +201,7 @@ export default function PaymentPage() {
         </div>
         <h2 className="text-2xl font-bold mb-2">{auth.isAdmin ? '관리자 권한 활성화됨' : '프리미엄 활성화됨'}</h2>
         <p className="text-muted-foreground mb-2">
-          {auth.isAdmin ? 'ADMIN_EMAILS allowlist 계정은 모든 유료 기능을 사용할 수 있습니다.' : '서버에서 검증된 프리미엄 상태입니다.'}
+          {auth.isAdmin ? '관리자 계정은 모든 유료 기능을 사용할 수 있습니다.' : '프리미엄 권한이 활성화되어 있습니다.'}
         </p>
         <p className="text-xs text-muted-foreground mb-2">오늘 무료 사용: {dailyFreeUsed}/{dailyFreeLimit}</p>
         {!auth.isAdmin && <p className="text-sm text-muted-foreground mb-8">{premiumLabel}</p>}
@@ -245,7 +245,7 @@ export default function PaymentPage() {
         </div>
         <h1 className="text-3xl font-bold tracking-tight">요금제 선택</h1>
         <p className="text-muted-foreground max-w-md mx-auto">
-          Google 로그인 후 Polar.sh 결제로 서버 검증 프리미엄 기능을 이용하세요.
+          Google 로그인 후 안전한 결제로 프리미엄 기능을 이용하세요.
         </p>
         <div className="flex justify-center gap-2 text-sm">
           {auth.loggedIn ? (
@@ -304,7 +304,7 @@ export default function PaymentPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <ul className="space-y-2.5">
-              {['무료 플랜의 모든 기능', 'PDF → HWP 변환 1회', 'PDF 암호 설정/해제 1회', '서버 검증 이용권', '광고 없음'].map((f) => (
+              {['무료 플랜의 모든 기능', 'PDF → HWP 변환 1회', 'PDF 암호 설정/해제 1회', '구매 즉시 1회 이용권 지급', '광고 없음'].map((f) => (
                 <li key={f} className="flex items-center gap-2 text-sm">
                   <CheckCircle2 className="w-4 h-4 text-blue-500 flex-shrink-0" />
                   <span>{f}</span>
@@ -390,7 +390,7 @@ export default function PaymentPage() {
             <Shield className="w-5 h-5 text-green-600" />
           </div>
           <h3 className="font-semibold text-sm">안전한 결제</h3>
-          <p className="text-xs text-muted-foreground">Polar.sh 체크아웃과 서버 webhook 검증으로 처리합니다.</p>
+          <p className="text-xs text-muted-foreground">Polar.sh 보안 체크아웃으로 처리하고 결제 완료 후 권한을 자동 반영합니다.</p>
         </div>
         <div className="space-y-2">
           <div className="w-10 h-10 mx-auto rounded-full bg-blue-100 flex items-center justify-center">
@@ -403,8 +403,8 @@ export default function PaymentPage() {
           <div className="w-10 h-10 mx-auto rounded-full bg-purple-100 flex items-center justify-center">
             <CreditCard className="w-5 h-5 text-purple-600" />
           </div>
-          <h3 className="font-semibold text-sm">서버 검증 프리미엄</h3>
-          <p className="text-xs text-muted-foreground">브라우저 저장소가 아니라 `/api/auth/me` 응답 기준으로 권한을 확인합니다.</p>
+          <h3 className="font-semibold text-sm">계정 기반 이용권 관리</h3>
+          <p className="text-xs text-muted-foreground">결제한 이용권과 구독 상태는 로그인 계정에 안전하게 연결됩니다.</p>
         </div>
       </div>
 
@@ -412,7 +412,7 @@ export default function PaymentPage() {
         <h2 className="text-xl font-bold text-center">자주 묻는 질문</h2>
         {[
           { q: '무료로 얼마나 쓸 수 있나요?', a: '하루 3건까지 무료입니다. 주민번호 마스킹, 도장 삽입, PDF 병합 등 기본 기능은 계속 사용할 수 있습니다.' },
-          { q: '건당 결제는 어떻게 하나요?', a: 'Google 로그인 후 프리미엄 기능을 사용할 때 1,000원 이용권을 결제합니다. 서버가 남은 이용권을 검증합니다.' },
+          { q: '건당 결제는 어떻게 하나요?', a: 'Google 로그인 후 1,000원 이용권을 결제하면 유료 기능을 1회 사용할 수 있습니다. 남은 이용권은 계정에 자동 반영됩니다.' },
           { q: '서버 처리 파일은 얼마나 보관되나요?', a: '모든 서버 처리 파일은 임시 보관되며 10분 이내 자동 삭제됩니다.' },
           { q: '환불은 어떻게 하나요?', a: '결제 완료 후 7일 이내 환불 가능합니다. 이메일(refund@pdfm.ponslink.com)로 문의해주세요.' },
         ].map((item) => (
