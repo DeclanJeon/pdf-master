@@ -4,8 +4,9 @@ import { Upload, FileText, Download, AlertCircle, Loader2, CheckCircle2, Info } 
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { resolveApiBase } from '@/lib/apiBase';
 
-const API_BASE = import.meta.env.VITE_API_URL || '';
+const API_BASE = resolveApiBase(import.meta.env);
 
 type Step = 'upload' | 'converting' | 'done' | 'error';
 
@@ -29,7 +30,9 @@ export default function HwpToPdfTool() {
     fetch(`${API_BASE}/api/usage`)
       .then(r => r.json())
       .then(d => setUsageRemaining(d.remaining ?? 3))
-      .catch(() => {});
+      .catch(() => {
+        setUsageRemaining(3);
+      });
   }, []);
 
   // Cleanup polling on unmount
@@ -58,7 +61,7 @@ export default function HwpToPdfTool() {
           setStep('error');
           if (pollingRef.current) clearInterval(pollingRef.current);
         }
-      } catch (err: any) {
+      } catch {
         failCount++;
         if (failCount >= 5) {
           setErrorMsg('서버 연결 오류가 반복됩니다. 잠시 후 다시 시도해주세요.');
@@ -101,8 +104,8 @@ export default function HwpToPdfTool() {
       const data: ConversionResult = await res.json();
       setProgress(10);
       startPolling(data.jobId);
-    } catch (err: any) {
-      setErrorMsg(err.message || '업로드 중 오류가 발생했습니다.');
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : '업로드 중 오류가 발생했습니다.');
       setStep('error');
     }
   }, []);

@@ -11,6 +11,7 @@
     "build:server": "tsc --project tsconfig.server.json",
     "lint": "eslint .",
     "test:masking": "tsx scripts/test_masking_detection.ts",
+    "test:hwp-api-base": "tsx scripts/test_hwp_api_base.ts",
     "preview": "vite preview",
     "start": "NODE_ENV=production tsx --env-file=.env server/index.ts"
   },
