@@ -61,6 +61,7 @@ const PDF_HWP_USES_PAGE_BACKGROUND = PDF_HWP_VISUAL_MODE === 'clean-background-v
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.resolve(__dirname, '../uploads');
 const OUTPUT_DIR = process.env.OUTPUT_DIR || path.resolve(__dirname, '../outputs');
 const AUTH_STORE_PATH = process.env.AUTH_STORE_PATH || path.resolve(__dirname, '../data/auth-store.json');
+const USAGE_STORE_PATH = process.env.USAGE_STORE_PATH || path.resolve(__dirname, '../data/usage-store.json');
 const SESSION_COOKIE_NAME = process.env.SESSION_COOKIE_NAME || 'pdfm_session';
 const OAUTH_STATE_COOKIE_NAME = 'pdfm_oauth_state';
 const OAUTH_REDIRECT_COOKIE_NAME = 'pdfm_oauth_redirect';
@@ -2755,7 +2756,30 @@ app.post('/api/convert/hwp-to-pdf', upload.single('file'), async (req: Request, 
     return res.status(400).json({ error: 'HWP 파일을 업로드해주세요.' });
   }
 
-  console.log(`[UPLOAD] file=${req.file.originalname} size=${req.file.size} mimetype=${req.file.mimetype}`);
+  const originalName = req.file.originalname || '';
+  if (!originalName.toLowerCase().endsWith('.hwp') && !originalName.toLowerCase().endsWith('.hwpx')) {
+    try { fs.unlinkSync(req.file.path); } catch { /* skip */ }
+    return res.status(400).json({ error: 'HWP/HWPX 파일만 변환 가능합니다.', code: 'INVALID_FILE_TYPE' });
+  }
+
+  const usageContext = getFreeUsageContext(req);
+  let usageAfter: ReturnType<typeof checkUsageLimit> | null = null;
+  if (!usageContext.exempt) {
+    const usageBefore = checkUsageLimit(usageContext.key);
+    if (!usageBefore.allowed) {
+      try { fs.unlinkSync(req.file.path); } catch { /* skip */ }
+      return res.status(429).json({
+        error: '오늘 무료 변환 횟수를 모두 사용했습니다. 내일 다시 이용하거나 결제 후 계속 사용할 수 있습니다.',
+        code: 'FREE_DAILY_LIMIT_EXCEEDED',
+        dailyLimit: FREE_DAILY_LIMIT,
+        used: FREE_DAILY_LIMIT,
+        remaining: 0,
+      });
+    }
+    usageAfter = incrementUsage(usageContext.key);
+  }
+
+  console.log(`[UPLOAD] file=${req.file.originalname} size=${req.file.size} mimetype=${req.file.mimetype} usageKey=${usageContext.key} usageRemaining=${usageAfter?.remaining ?? 'unlimited'}`);
 
   const jobId = nanoid(16);
   const jobDir = path.join(OUTPUT_DIR, jobId);
@@ -2770,7 +2794,6 @@ app.post('/api/convert/hwp-to-pdf', upload.single('file'), async (req: Request, 
   jobs.set(jobId, job);
 
   const inputPath = req.file.path;
-  const originalName = req.file.originalname || '';
   const isHwpx = originalName.toLowerCase().endsWith('.hwpx');
   const hwpxPath = isHwpx ? inputPath : path.join(jobDir, 'output.hwpx');
   const htmlPath = path.join(jobDir, 'output.html');
@@ -2924,7 +2947,14 @@ app.post('/api/convert/hwp-to-pdf', upload.single('file'), async (req: Request, 
     }
   })();
 
-  res.json({ jobId, status: 'processing', progress: 0 });
+  res.json({
+    jobId,
+    status: 'processing',
+    progress: 0,
+    usage: usageAfter
+      ? { dailyLimit: FREE_DAILY_LIMIT, used: FREE_DAILY_LIMIT - usageAfter.remaining, remaining: usageAfter.remaining }
+      : { dailyLimit: FREE_DAILY_LIMIT, used: 0, remaining: FREE_DAILY_LIMIT, unlimited: true },
+  });
 });
 
 /**
@@ -2973,30 +3003,72 @@ interface UsageRecord {
   date: string; // YYYY-MM-DD
 }
 
-const usageByIp = new Map<string, UsageRecord>();
+const FREE_DAILY_LIMIT = 3;
 
-function checkUsageLimit(ip: string): { allowed: boolean; remaining: number } {
-  const today = new Date().toISOString().slice(0, 10);
-  let record = usageByIp.get(ip);
-  if (!record || record.date !== today) {
-    record = { count: 0, date: today };
-    usageByIp.set(ip, record);
+interface UsageStore {
+  records: Record<string, UsageRecord>;
+}
+
+function defaultUsageStore(): UsageStore {
+  return { records: {} };
+}
+
+function readUsageStore(): UsageStore {
+  try {
+    if (!fs.existsSync(USAGE_STORE_PATH)) return defaultUsageStore();
+    const parsed = JSON.parse(fs.readFileSync(USAGE_STORE_PATH, 'utf8')) as Partial<UsageStore>;
+    return { records: parsed.records || {} };
+  } catch (err) {
+    console.error('[USAGE] Failed to read usage store:', err instanceof Error ? err.message : err);
+    return defaultUsageStore();
   }
-  const FREE_DAILY_LIMIT = 3;
+}
+
+function writeUsageStore(store: UsageStore) {
+  ensureParentDir(USAGE_STORE_PATH);
+  const tempPath = `${USAGE_STORE_PATH}.${process.pid}.tmp`;
+  fs.writeFileSync(tempPath, JSON.stringify(store, null, 2), 'utf8');
+  fs.renameSync(tempPath, USAGE_STORE_PATH);
+}
+
+function getFreeUsageContext(req: Request): { key: string; exempt: boolean } {
+  const session = getSessionFromRequest(req);
+  const email = session?.user.email;
+  const premium = getPremiumStatusForEmail(email);
+  const exempt = Boolean(email && (isAdminEmail(email) || premium.isPremium));
+  const key = email ? `user:${normalizeEmail(email)}` : `ip:${clientIpAddress(req) || 'unknown'}`;
+  return { key, exempt };
+}
+
+function currentUsageRecord(store: UsageStore, key: string): UsageRecord {
+  const today = new Date().toISOString().slice(0, 10);
+  const record = store.records[key];
+  if (!record || record.date !== today) return { count: 0, date: today };
+  return record;
+}
+
+function usageLimitFromRecord(record: UsageRecord): { allowed: boolean; remaining: number; used: number; dailyLimit: number } {
+  const used = Math.min(record.count, FREE_DAILY_LIMIT);
   return {
     allowed: record.count < FREE_DAILY_LIMIT,
     remaining: Math.max(0, FREE_DAILY_LIMIT - record.count),
+    used,
+    dailyLimit: FREE_DAILY_LIMIT,
   };
 }
 
-function incrementUsage(ip: string) {
-  const today = new Date().toISOString().slice(0, 10);
-  let record = usageByIp.get(ip);
-  if (!record || record.date !== today) {
-    record = { count: 0, date: today };
-    usageByIp.set(ip, record);
-  }
+function checkUsageLimit(key: string): { allowed: boolean; remaining: number; used: number; dailyLimit: number } {
+  const store = readUsageStore();
+  return usageLimitFromRecord(currentUsageRecord(store, key));
+}
+
+function incrementUsage(key: string): { allowed: boolean; remaining: number; used: number; dailyLimit: number } {
+  const store = readUsageStore();
+  const record = currentUsageRecord(store, key);
   record.count++;
+  store.records[key] = record;
+  writeUsageStore(store);
+  return usageLimitFromRecord(record);
 }
 
 /**
@@ -3004,12 +3076,21 @@ function incrementUsage(ip: string) {
  * Check remaining free uses
  */
 app.get('/api/usage', (req: Request, res: Response) => {
-  const ip = req.ip || 'unknown';
-  const limit = checkUsageLimit(ip);
+  const usageContext = getFreeUsageContext(req);
+  if (usageContext.exempt) {
+    return res.json({
+      dailyLimit: FREE_DAILY_LIMIT,
+      used: 0,
+      remaining: FREE_DAILY_LIMIT,
+      unlimited: true,
+    });
+  }
+  const limit = checkUsageLimit(usageContext.key);
   res.json({
-    dailyLimit: 3,
-    used: 3 - limit.remaining,
+    dailyLimit: FREE_DAILY_LIMIT,
+    used: limit.used,
     remaining: limit.remaining,
+    unlimited: false,
   });
 });
 

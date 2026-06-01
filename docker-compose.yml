@@ -33,6 +33,7 @@ services:
       SESSION_TTL_MS: ${SESSION_TTL_MS:-2592000000}
       COOKIE_SECURE: ${COOKIE_SECURE:-true}
       AUTH_STORE_PATH: ${AUTH_STORE_PATH:-/app/data/auth-store.json}
+      USAGE_STORE_PATH: ${USAGE_STORE_PATH:-/app/data/usage-store.json}
 
       # Polar.sh checkout/webhook config expected by WORK-02/WORK-03 payment flow
       POLAR_ACCESS_TOKEN: ${POLAR_ACCESS_TOKEN:-}

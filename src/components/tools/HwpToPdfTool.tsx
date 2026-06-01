@@ -14,6 +14,12 @@ interface ConversionResult {
   jobId: string;
   status: string;
   progress: number;
+  usage?: {
+    dailyLimit: number;
+    used: number;
+    remaining: number;
+    unlimited?: boolean;
+  };
 }
 
 export default function HwpToPdfTool() {
@@ -27,7 +33,7 @@ export default function HwpToPdfTool() {
 
   // Fetch usage on mount
   useEffect(() => {
-    fetch(`${API_BASE}/api/usage`)
+    fetch(`${API_BASE}/api/usage`, { credentials: 'include' })
       .then(r => r.json())
       .then(d => setUsageRemaining(d.remaining ?? 3))
       .catch(() => {
@@ -93,15 +99,22 @@ export default function HwpToPdfTool() {
     try {
       const res = await fetch(`${API_BASE}/api/convert/hwp-to-pdf`, {
         method: 'POST',
+        credentials: 'include',
         body: formData,
       });
 
       if (!res.ok) {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({}));
+        if (typeof err.remaining === 'number') {
+          setUsageRemaining(err.remaining);
+        }
         throw new Error(err.error || '업로드 실패');
       }
 
       const data: ConversionResult = await res.json();
+      if (typeof data.usage?.remaining === 'number') {
+        setUsageRemaining(data.usage.remaining);
+      }
       setProgress(10);
       startPolling(data.jobId);
     } catch (err) {
