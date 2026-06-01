@@ -3,27 +3,108 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="한국인을 위해 만든 PDF 도구 - 한글(HWP) 변환, 도장 삽입, 주민번호 마스킹. 서버 전송 없이 브라우저에서 처리." />
+    <meta name="description" content="한글(HWP) PDF 변환, PDF 주민번호 마스킹, 도장·인감 삽입, PDF 병합·분할·압축을 제공하는 한국형 PDF 도구입니다. 브라우저 처리와 서버 임시 변환을 구분해 안전하게 이용할 수 있습니다." />
     <meta name="keywords" content="PDF, 한글, HWP, 변환, 도장, 인감, 마스킹, 주민등록번호, 개인정보, 보안, PDF병합, PDF분할, PDF압축, PDF워터마크, PDF암호, PDF서명" />
     <meta name="theme-color" content="#dc2626" />
     <meta name="author" content="PDF마스터" />
-    <link rel="canonical" href="https://pdfmaster.kr/" />
+    <link rel="canonical" href="https://pdfm.ponslink.com/" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="manifest" href="/manifest.json" />
     <!-- Open Graph -->
     <meta property="og:title" content="PDF마스터 - 한국인을 위해 만든 PDF 도구" />
-    <meta property="og:description" content="한글 PDF 변환, 도장 삽입, 주민번호 자동 마스킹. 모든 처리는 브라우저에서." />
+    <meta property="og:description" content="한글(HWP) PDF 변환, 주민번호 자동 마스킹, 도장·인감 삽입, PDF 병합·분할·압축을 한 곳에서 처리하는 한국형 PDF 도구입니다." />
     <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://pdfmaster.kr/" />
+    <meta property="og:url" content="https://pdfm.ponslink.com/" />
     <meta property="og:site_name" content="PDF마스터" />
-    <meta property="og:image" content="https://pdfmaster.kr/favicon.svg" />
+    <meta property="og:image" content="https://pdfm.ponslink.com/favicon.svg" />
+    <meta property="og:image:alt" content="PDF마스터 로고" />
     <meta property="og:locale" content="ko_KR" />
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary" />
+    <meta name="robots" content="index,follow,max-image-preview:large,max-snippet:-1,max-video-preview:-1" />
     <meta name="twitter:title" content="PDF마스터 - 한국인을 위해 만든 PDF 도구" />
-    <meta name="twitter:description" content="한글 PDF 변환, 도장 삽입, 주민번호 자동 마스킹. 모든 처리는 브라우저에서." />
-    <meta name="twitter:image" content="https://pdfmaster.kr/favicon.svg" />
-    <title>PDF마스터 — 한국인을 위해 만든 PDF 도구</title>
+    <meta name="twitter:description" content="한글(HWP) PDF 변환, 주민번호 자동 마스킹, 도장·인감 삽입, PDF 병합·분할·압축을 한 곳에서 처리하는 한국형 PDF 도구입니다." />
+    <meta name="twitter:image" content="https://pdfm.ponslink.com/favicon.svg" />
+    <title>PDF마스터 — 한글 HWP PDF 변환·주민번호 마스킹·도장 삽입</title>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://pdfm.ponslink.com/#organization",
+            "name": "PDF마스터",
+            "url": "https://pdfm.ponslink.com/",
+            "logo": "https://pdfm.ponslink.com/favicon.svg",
+            "contactPoint": [{
+              "@type": "ContactPoint",
+              "contactType": "customer support",
+              "email": "refund@pdfm.ponslink.com",
+              "availableLanguage": ["ko"]
+            }]
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://pdfm.ponslink.com/#website",
+            "name": "PDF마스터",
+            "url": "https://pdfm.ponslink.com/",
+            "inLanguage": "ko-KR",
+            "publisher": { "@id": "https://pdfm.ponslink.com/#organization" },
+            "description": "한글(HWP) PDF 변환, PDF 주민번호 마스킹, 도장·인감 삽입, PDF 병합·분할·압축을 제공하는 한국형 PDF 도구"
+          },
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://pdfm.ponslink.com/#app",
+            "name": "PDF마스터",
+            "applicationCategory": "BusinessApplication",
+            "operatingSystem": "Web",
+            "url": "https://pdfm.ponslink.com/",
+            "inLanguage": "ko-KR",
+            "offers": { "@type": "Offer", "price": "0", "priceCurrency": "KRW" },
+            "featureList": [
+              "한글(HWP/HWPX) PDF 변환",
+              "PDF 주민번호 자동 마스킹",
+              "PDF 도장·인감 삽입",
+              "PDF 병합·분할·압축",
+              "PDF 암호 설정·해제"
+            ]
+          },
+          {
+            "@type": "ItemList",
+            "@id": "https://pdfm.ponslink.com/#tools",
+            "name": "PDF마스터 도구 목록",
+            "itemListElement": [
+              { "@type": "ListItem", "position": 1, "name": "한글(HWP) → PDF 변환", "url": "https://pdfm.ponslink.com/tool/hwp-to-pdf" },
+              { "@type": "ListItem", "position": 2, "name": "주민번호 자동 마스킹", "url": "https://pdfm.ponslink.com/tool/pdf-mask-rrn" },
+              { "@type": "ListItem", "position": 3, "name": "도장/인감 삽입", "url": "https://pdfm.ponslink.com/tool/pdf-stamp" },
+              { "@type": "ListItem", "position": 4, "name": "PDF 병합", "url": "https://pdfm.ponslink.com/tool/pdf-merge" },
+              { "@type": "ListItem", "position": 5, "name": "PDF 압축", "url": "https://pdfm.ponslink.com/tool/pdf-compress" }
+            ]
+          },
+          {
+            "@type": "FAQPage",
+            "@id": "https://pdfm.ponslink.com/#faq",
+            "mainEntity": [
+              {
+                "@type": "Question",
+                "name": "PDF마스터에서 한글 HWP 파일을 PDF로 변환할 수 있나요?",
+                "acceptedAnswer": { "@type": "Answer", "text": "네. PDF마스터는 HWP/HWPX 파일을 PDF로 변환하는 한국형 문서 변환 기능을 제공합니다. 무료 사용자는 하루 3회까지 이용할 수 있습니다." }
+              },
+              {
+                "@type": "Question",
+                "name": "PDF 주민번호 마스킹은 어떻게 처리되나요?",
+                "acceptedAnswer": { "@type": "Answer", "text": "주민등록번호, 전화번호, 이메일 등 개인정보 패턴을 감지해 PDF에서 마스킹할 수 있습니다. 브라우저에서 가능한 처리는 사용자의 기기 안에서 수행합니다." }
+              },
+              {
+                "@type": "Question",
+                "name": "업로드한 문서 파일은 얼마나 보관되나요?",
+                "acceptedAnswer": { "@type": "Answer", "text": "서버 처리가 필요한 기능의 업로드 파일과 결과 파일은 임시 처리 후 현재 기준 10분 이내 자동 삭제되도록 운영합니다." }
+              }
+            ]
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

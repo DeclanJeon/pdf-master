@@ -1,4 +1,5 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://pdfmaster.kr/sitemap.xml
+Sitemap: https://pdfm.ponslink.com/sitemap.xml
+Host: https://pdfm.ponslink.com
