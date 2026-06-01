@@ -8,9 +8,12 @@ PDF마스터는 한국 문서 업무에 맞춘 웹 기반 PDF 도구입니다.
 
 ## 핵심 기능
 
-- 한글(HWP/HWPX) 파일을 PDF로 변환합니다: https://pdfm.ponslink.com/tool/hwp-to-pdf
-- PDF에서 주민등록번호, 전화번호, 이메일 등 개인정보를 마스킹합니다: https://pdfm.ponslink.com/tool/pdf-mask-rrn
-- PDF에 한국식 도장, 인감, 서명 이미지를 삽입합니다: https://pdfm.ponslink.com/tool/pdf-stamp
+- 한글(HWP/HWPX) 파일을 PDF로 변환합니다: https://pdfm.ponslink.com/hwp-to-pdf
+  - 실행 도구: https://pdfm.ponslink.com/tool/hwp-to-pdf
+- PDF에서 주민등록번호, 전화번호, 이메일 등 개인정보를 마스킹합니다: https://pdfm.ponslink.com/pdf-rrn-mask
+  - 실행 도구: https://pdfm.ponslink.com/tool/pdf-mask-rrn
+- PDF에 한국식 도장, 인감, 서명 이미지를 삽입합니다: https://pdfm.ponslink.com/pdf-stamp
+  - 실행 도구: https://pdfm.ponslink.com/tool/pdf-stamp
 - PDF 병합, 분할, 압축, 워터마크, 페이지 번호 추가를 제공합니다.
 - PDF 암호 설정/해제와 PDF → HWP, PDF → DOCX 변환을 제공합니다.
 

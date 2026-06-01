@@ -18,11 +18,15 @@ export function Header() {
         </Link>
 
         <nav className="ml-auto flex items-center gap-4 text-sm">
-          <Link to="/tool/pdf-mask-rrn" className="hidden items-center gap-1 hover:text-red-600 md:flex">
+          <Link to="/hwp-to-pdf" className="hidden items-center gap-1 hover:text-red-600 lg:flex">
+            <FileText className="h-4 w-4" />
+            HWP PDF 변환
+          </Link>
+          <Link to="/pdf-rrn-mask" className="hidden items-center gap-1 hover:text-red-600 md:flex">
             <Shield className="h-4 w-4" />
             주민번호 마스킹
           </Link>
-          <Link to="/tool/pdf-stamp" className="hidden items-center gap-1 hover:text-red-600 md:flex">
+          <Link to="/pdf-stamp" className="hidden items-center gap-1 hover:text-red-600 md:flex">
             <Zap className="h-4 w-4" />
             도장 삽입
           </Link>

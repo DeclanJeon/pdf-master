@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://pdfm.ponslink.com/</loc><priority>1.0</priority><changefreq>weekly</changefreq></url>
+  <url><loc>https://pdfm.ponslink.com/hwp-to-pdf</loc><priority>0.98</priority><changefreq>weekly</changefreq></url>
+  <url><loc>https://pdfm.ponslink.com/pdf-rrn-mask</loc><priority>0.98</priority><changefreq>weekly</changefreq></url>
+  <url><loc>https://pdfm.ponslink.com/pdf-stamp</loc><priority>0.96</priority><changefreq>weekly</changefreq></url>
   <url><loc>https://pdfm.ponslink.com/tool/hwp-to-pdf</loc><priority>0.95</priority><changefreq>weekly</changefreq></url>
   <url><loc>https://pdfm.ponslink.com/tool/pdf-mask-rrn</loc><priority>0.95</priority><changefreq>weekly</changefreq></url>
   <url><loc>https://pdfm.ponslink.com/tool/pdf-stamp</loc><priority>0.9</priority><changefreq>weekly</changefreq></url>

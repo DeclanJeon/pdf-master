@@ -4,6 +4,7 @@ import { Header } from '@/components/layout/Header'
 import { Footer } from '@/components/layout/Footer'
 import { HomePage } from '@/components/layout/HomePage'
 import { PrivacyPolicyPage } from '@/components/layout/PrivacyPolicyPage'
+import { SeoLandingPage } from '@/components/layout/SeoLandingPage'
 import { ToolPage } from '@/components/tools/ToolPage'
 import PaymentPage from '@/components/tools/PaymentPage'
 import AdminPage from '@/components/tools/AdminPage'
@@ -16,6 +17,7 @@ export default function App() {
         <main className="flex-1">
           <Routes>
             <Route path="/" element={<HomePage />} />
+            <Route path="/:slug" element={<SeoLandingPage />} />
             <Route path="/tool/:toolId" element={<ToolPage />} />
             <Route path="/pricing" element={<PaymentPage />} />
             <Route path="/privacy" element={<PrivacyPolicyPage />} />

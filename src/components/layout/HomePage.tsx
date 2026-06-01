@@ -40,14 +40,14 @@ export function HomePage() {
 
           <div className="mt-8 flex justify-center gap-4">
             <Link
-              to="/tool/pdf-mask-rrn"
+              to="/pdf-rrn-mask"
               className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-6 py-3 font-medium text-white hover:bg-red-700"
             >
               <ShieldCheck className="h-5 w-5" />
               주민번호 마스킹 시작
             </Link>
             <Link
-              to="/tool/pdf-stamp"
+              to="/pdf-stamp"
               className="inline-flex items-center gap-2 rounded-lg border border-red-200 px-6 py-3 font-medium text-red-600 hover:bg-red-50"
             >
               <Stamp className="h-5 w-5" />
@@ -144,6 +144,33 @@ export function HomePage() {
               </div>
             )
           })}
+        </div>
+      </section>
+
+      {/* 검색 유입 랜딩 */}
+      <section className="py-14 bg-white">
+        <div className="container mx-auto px-4">
+          <div className="text-center">
+            <h2 className="text-2xl font-bold">자주 찾는 PDF 작업 바로가기</h2>
+            <p className="mt-3 text-sm text-muted-foreground">
+              검색에서 많이 찾는 한글 변환, 개인정보 마스킹, 도장 삽입 안내 페이지입니다.
+            </p>
+          </div>
+          <div className="mt-8 grid gap-4 md:grid-cols-3">
+            {[
+              { title: '한글 HWP PDF 변환', text: 'HWP/HWPX 파일을 설치 없이 PDF로 변환합니다.', to: '/hwp-to-pdf' },
+              { title: 'PDF 주민번호 마스킹', text: '주민등록번호·전화번호·이메일 노출을 줄입니다.', to: '/pdf-rrn-mask' },
+              { title: 'PDF 도장 삽입', text: '도장·인감·직인 이미지를 PDF에 넣습니다.', to: '/pdf-stamp' },
+            ].map((item) => (
+              <Link key={item.to} to={item.to} className="rounded-xl border bg-white p-5 hover:border-red-200 hover:shadow-sm">
+                <h3 className="font-semibold hover:text-red-600">{item.title}</h3>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">{item.text}</p>
+                <span className="mt-4 inline-flex items-center text-sm font-medium text-red-600">
+                  자세히 보기 <ArrowRight className="ml-1 h-4 w-4" />
+                </span>
+              </Link>
+            ))}
+          </div>
         </div>
       </section>
 
