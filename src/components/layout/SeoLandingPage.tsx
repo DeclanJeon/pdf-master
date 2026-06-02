@@ -166,6 +166,16 @@ function upsertMeta(name: string, content: string) {
   meta.setAttribute('content', content)
 }
 
+function upsertProperty(property: string, content: string) {
+  let meta = document.querySelector(`meta[property="${property}"]`) as HTMLMetaElement | null
+  if (!meta) {
+    meta = document.createElement('meta')
+    meta.setAttribute('property', property)
+    document.head.appendChild(meta)
+  }
+  meta.setAttribute('content', content)
+}
+
 function upsertCanonical(href: string) {
   let link = document.querySelector('link[rel="canonical"]') as HTMLLinkElement | null
   if (!link) {
@@ -182,10 +192,26 @@ export function SeoLandingPage() {
 
   useEffect(() => {
     if (!page) return
+    const url = `https://pdfm.ponslink.com/${page.slug}`
+    const imageUrl = 'https://pdfm.ponslink.com/og-image.png'
     document.title = page.metaTitle
     upsertMeta('description', page.metaDescription)
     upsertMeta('keywords', page.keywords.join(', '))
-    upsertCanonical(`https://pdfm.ponslink.com/${page.slug}`)
+    upsertMeta('twitter:card', 'summary_large_image')
+    upsertMeta('twitter:title', page.metaTitle)
+    upsertMeta('twitter:description', page.metaDescription)
+    upsertMeta('twitter:image', imageUrl)
+    upsertMeta('twitter:image:alt', `${page.title} — PDF마스터`)
+    upsertProperty('og:title', page.metaTitle)
+    upsertProperty('og:description', page.metaDescription)
+    upsertProperty('og:url', url)
+    upsertProperty('og:image', imageUrl)
+    upsertProperty('og:image:secure_url', imageUrl)
+    upsertProperty('og:image:type', 'image/png')
+    upsertProperty('og:image:width', '1200')
+    upsertProperty('og:image:height', '630')
+    upsertProperty('og:image:alt', `${page.title} — PDF마스터`)
+    upsertCanonical(url)
   }, [page])
 
   if (!page) return <Navigate to="/" replace />
