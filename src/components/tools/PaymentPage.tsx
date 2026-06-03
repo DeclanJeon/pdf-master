@@ -39,6 +39,13 @@ interface Feature {
   monthly: boolean | string
 }
 
+interface UsageInfo {
+  dailyLimit: number
+  used: number
+  remaining: number
+  unlimited: boolean
+}
+
 const EMPTY_PREMIUM: PremiumStatus = {
   isPremium: false,
   plan: null,
@@ -51,8 +58,9 @@ const FEATURES: Feature[] = [
   { name: '도장/인감 삽입',      free: true,  perUse: true,  monthly: true },
   { name: 'PDF 병합/분할/압축',  free: true,  perUse: true,  monthly: true },
   { name: 'HWP → PDF 변환',      free: '3회', perUse: true,  monthly: true },
-  { name: 'PDF → HWP 변환',      free: false, perUse: true,  monthly: true },
-  { name: 'PDF 암호 설정/해제',   free: false, perUse: true,  monthly: true },
+  { name: 'PDF → HWP 변환',      free: '3회', perUse: true,  monthly: true },
+  { name: 'PDF 암호 설정/해제',   free: '3회', perUse: true,  monthly: true },
+  { name: '서명 이미지 삽입',     free: '3회', perUse: true,  monthly: true },
   { name: '하루 사용 제한',       free: '3건', perUse: '없음', monthly: '없음' },
   { name: '파일 보관',           free: '10분', perUse: '10분', monthly: '10분' },
   { name: '우선 처리',           free: false, perUse: false, monthly: true },
@@ -95,7 +103,8 @@ export default function PaymentPage() {
   const [paymentLoading, setPaymentLoading] = useState<PlanId | null>(null)
   const [checkoutErrorText, setCheckoutErrorText] = useState<string | null>(null)
   const [auth, setAuth] = useState<AuthState>({ loading: true, loggedIn: false, user: null, premium: EMPTY_PREMIUM, isAdmin: false })
-  const { dailyFreeUsed, dailyFreeLimit, setPremiumUnlocked } = useAppStore()
+  const [trialUsage, setTrialUsage] = useState<UsageInfo | null>(null)
+  const { setPremiumUnlocked } = useAppStore()
   const checkoutSuccess = searchParams.get('success') === 'true' || searchParams.get('success') === '1'
   const checkoutCanceled = searchParams.get('canceled') === 'true' || searchParams.get('cancel') === '1'
   const checkoutError = searchParams.get('error')
@@ -125,6 +134,35 @@ export default function PaymentPage() {
   useEffect(() => {
     refreshAuth()
   }, [refreshAuth])
+
+  const refreshUsage = useCallback(async () => {
+    try {
+      const response = await fetch('/api/usage', { credentials: 'include' })
+      const data = await response.json()
+      if (data && typeof data === 'object') {
+        setTrialUsage({
+          dailyLimit: Number(data.dailyLimit) || 3,
+          used: Number(data.used) || 0,
+          remaining: Number(data.remaining) || 0,
+          unlimited: Boolean(data.unlimited),
+        })
+      }
+      return
+    } catch {
+      // no-op
+    }
+    setTrialUsage({ dailyLimit: 3, used: 0, remaining: 0, unlimited: false })
+  }, [])
+
+  useEffect(() => {
+    refreshUsage()
+  }, [refreshUsage])
+
+  const premiumUsageText = useMemo(() => {
+    if (!trialUsage) return '확인 중'
+    if (trialUsage.unlimited) return '무제한'
+    return `${trialUsage.used} / ${trialUsage.dailyLimit}`
+  }, [trialUsage])
 
   const premiumLabel = useMemo(() => {
     if (!auth.premium.isPremium) return ''
@@ -202,7 +240,7 @@ export default function PaymentPage() {
         <p className="text-muted-foreground mb-2">
           {auth.isAdmin ? '관리자 계정은 모든 유료 기능을 사용할 수 있습니다.' : '프리미엄 권한이 활성화되어 있습니다.'}
         </p>
-        <p className="text-xs text-muted-foreground mb-2">오늘 무료 사용: {dailyFreeUsed}/{dailyFreeLimit}</p>
+        <p className="text-xs text-muted-foreground mb-2">오늘 프리미엄 무료 사용량: {premiumUsageText}</p>
         {!auth.isAdmin && <p className="text-sm text-muted-foreground mb-8">{premiumLabel}</p>}
         <div className="flex justify-center gap-3">
           <Button variant="outline" size="sm" onClick={refreshAuth}>상태 새로고침</Button>
@@ -238,7 +276,7 @@ export default function PaymentPage() {
             {checkoutErrorText}
           </div>
         )}
-        <p className="text-xs text-muted-foreground">오늘 무료 사용: {dailyFreeUsed}/{dailyFreeLimit}</p>
+        <p className="text-xs text-muted-foreground">오늘 프리미엄 무료 사용량: {premiumUsageText}</p>
         <div className="w-14 h-14 mx-auto rounded-2xl bg-gradient-to-br from-yellow-400 to-orange-500 flex items-center justify-center shadow-lg">
           <Crown className="w-7 h-7 text-white" />
         </div>
@@ -272,13 +310,20 @@ export default function PaymentPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <ul className="space-y-2.5">
-              {['주민번호 마스킹', '도장/인감 삽입', 'PDF 병합/분할/압축', '하루 3건까지', '워터마크 추가'].map((f) => (
+              {[
+                '주민번호 마스킹',
+                '도장/인감 삽입',
+                'PDF 병합/분할/압축',
+                '워터마크 추가',
+                '하루 3건까지 기본 기능 이용',
+                '프리미엄 기능은 3회 무료 체험',
+              ].map((f) => (
                 <li key={f} className="flex items-center gap-2 text-sm">
                   <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
                   <span>{f}</span>
                 </li>
               ))}
-              {['PDF → HWP 변환', 'PDF 암호 설정/해제'].map((f) => (
+              {['PDF → HWP 변환', 'PDF 암호 설정/해제', '서명 이미지 삽입'].map((f) => (
                 <li key={f} className="flex items-center gap-2 text-sm text-muted-foreground">
                   <XIcon className="w-4 h-4 flex-shrink-0" />
                   <span>{f}</span>
@@ -303,7 +348,7 @@ export default function PaymentPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <ul className="space-y-2.5">
-              {['무료 플랜의 모든 기능', 'PDF → HWP 변환 1회', 'PDF 암호 설정/해제 1회', '구매 즉시 1회 이용권 지급'].map((f) => (
+              {['무료 플랜의 모든 기능', '프리미엄 기능을 1회 이용권으로 구매 사용', '구매 즉시 1회 이용권 지급'].map((f) => (
                 <li key={f} className="flex items-center gap-2 text-sm">
                   <CheckCircle2 className="w-4 h-4 text-blue-500 flex-shrink-0" />
                   <span>{f}</span>
@@ -410,10 +455,10 @@ export default function PaymentPage() {
       <div className="space-y-3 max-w-2xl mx-auto">
         <h2 className="text-xl font-bold text-center">자주 묻는 질문</h2>
         {[
-          { q: '무료로 얼마나 쓸 수 있나요?', a: '하루 3건까지 무료입니다. 주민번호 마스킹, 도장 삽입, PDF 병합 등 기본 기능은 계속 사용할 수 있습니다.' },
+          { q: '무료로 얼마나 쓸 수 있나요?', a: '프리미엄 기능은 하루 3회 무료로 이용할 수 있습니다. 기본 기능(마스킹/도장/병합 등)은 제한 없이 이용 가능합니다.' },
           { q: '건당 결제는 어떻게 하나요?', a: 'Google 로그인 후 1,000원 이용권을 결제하면 유료 기능을 1회 사용할 수 있습니다. 남은 이용권은 계정에 자동 반영됩니다.' },
           { q: '서버 처리 파일은 얼마나 보관되나요?', a: '모든 서버 처리 파일은 임시 보관되며 10분 이내 자동 삭제됩니다.' },
-          { q: '환불은 어떻게 하나요?', a: '결제 완료 후 7일 이내 환불 가능합니다. 이메일(refund@pdfm.ponslink.com)로 문의해주세요.' },
+          { q: '환불은 어떻게 하나요?', a: '결제 완료 후 7일 이내 환불 가능합니다. 이메일(info@ponslink.com)로 문의해주세요.' },
         ].map((item) => (
           <details key={item.q} className="group rounded-lg border bg-card">
             <summary className="flex items-center justify-between py-3 px-4 cursor-pointer font-medium text-sm">

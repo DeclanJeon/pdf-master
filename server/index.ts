@@ -8,6 +8,7 @@ import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
 import { fileURLToPath, pathToFileURL } from 'url';
 import crypto from 'crypto';
+import nodemailer from 'nodemailer';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -85,6 +86,14 @@ const POLAR_CHECKOUT_SUCCESS_URL = process.env.POLAR_CHECKOUT_SUCCESS_URL || `${
 const POLAR_CHECKOUT_CANCEL_URL = process.env.POLAR_CHECKOUT_CANCEL_URL || `${FRONTEND_URL}/pricing?canceled=true`;
 const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '').split(',').map((email) => normalizeEmail(email)).filter(Boolean);
 const ADMIN_AUDIT_LOG_PATH = process.env.ADMIN_AUDIT_LOG_PATH || path.resolve(__dirname, '../data/admin-audit.log');
+const SMTP_HOST = process.env.SMTP_HOST || '';
+const SMTP_PORT = Number(process.env.SMTP_PORT || '587');
+const SMTP_USER = process.env.SMTP_USER || '';
+const SMTP_PASS = process.env.SMTP_PASS || '';
+const SMTP_FROM = process.env.SMTP_FROM || '';
+const SMTP_SECURE = process.env.SMTP_SECURE === 'true';
+const CONTACT_RECIPIENT_EMAIL = process.env.CONTACT_EMAIL || 'info@ponslink.com';
+const CONTACT_SUBJECT_PREFIX = '[PDF마스터 문의]';
 const CORS_ALLOWED_ORIGINS = (process.env.CORS_ORIGIN || FRONTEND_URL)
   .split(',')
   .map((origin) => origin.trim().replace(/\/$/, ''))
@@ -226,9 +235,28 @@ interface PremiumStatus {
   oneTimePasses: number;
 }
 
+interface UsageInfo {
+  allowed: boolean;
+  remaining: number;
+  used: number;
+  dailyLimit: number;
+  unlimited?: boolean;
+}
+
+interface ContactPayload {
+  name: string;
+  email: string;
+  subject: string;
+  message: string;
+}
+
 interface PremiumRequest extends Request {
-  sessionRecord?: SessionRecord;
+  sessionRecord?: SessionRecord | null;
   premiumStatus?: PremiumStatus;
+}
+
+interface PremiumTrialRequest extends PremiumRequest {
+  trialUsage?: UsageInfo;
 }
 
 interface AdminRequest extends Request {
@@ -278,6 +306,43 @@ function writeAuthStore(store: AuthStore) {
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
+}
+
+function sanitizeLine(value: string, maxLength: number): string {
+  return value
+    .trim()
+    .replace(/\s+/g, ' ')
+    .slice(0, Math.max(1, maxLength));
+}
+
+function sanitizeMessage(value: string, maxLength: number): string {
+  return value
+    .replace(/\r/g, '')
+    .trim()
+    .slice(0, Math.max(1, maxLength));
+}
+
+function isValidEmail(value: string): boolean {
+  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value);
+}
+
+function escapeText(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+    .replace(/\n/g, '<br/>');
+}
+
+function contactTransporter() {
+  return nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_SECURE,
+    auth: SMTP_USER && SMTP_PASS ? { user: SMTP_USER, pass: SMTP_PASS } : undefined,
+  });
 }
 
 function signValue(value: string): string {
@@ -557,12 +622,25 @@ function adminRevokePremium(targetEmail: string) {
   return getPremiumStatusForEmail(email);
 }
 
-function requirePremium(req: PremiumRequest, res: Response, next: () => void) {
+function requirePremium(req: PremiumTrialRequest, res: Response, next: () => void) {
   const session = getSessionFromRequest(req);
   const premium = getPremiumStatusForEmail(session?.user.email);
   const isAdmin = isAdminEmail(session?.user.email);
-  if (!session || (!isAdmin && !premium.isPremium)) {
-    console.warn('[PREMIUM] blocked', {
+  if (isAdmin || premium.isPremium) {
+    req.sessionRecord = session;
+    req.premiumStatus = premium;
+    return next();
+  }
+
+  if (req.path === '/api/convert/hwp-to-pdf') {
+    req.sessionRecord = session;
+    req.premiumStatus = premium;
+    return next();
+  }
+
+  const usage = consumeFreeUsageForRequest(req);
+  if (!usage.allowed) {
+    console.warn('[PREMIUM] free trial blocked', {
       path: req.path,
       hasSession: Boolean(session),
       email: session?.user.email || null,
@@ -572,13 +650,18 @@ function requirePremium(req: PremiumRequest, res: Response, next: () => void) {
       oneTimePasses: premium.oneTimePasses,
       expiresAt: premium.expiresAt,
     });
-    return res.status(403).json({
-      error: '프리미엄 기능입니다. 로그인 후 결제를 완료하면 이용할 수 있습니다.',
-      code: 'PREMIUM_REQUIRED',
+    return res.status(429).json({
+      error: '오늘 무료 이용 횟수를 모두 사용했습니다. 내일 다시 이용하거나 결제 후 이용해주세요.',
+      code: 'FREE_DAILY_LIMIT_EXCEEDED',
+      dailyLimit: usage.dailyLimit,
+      used: usage.used,
+      remaining: usage.remaining,
     });
   }
+
   req.sessionRecord = session;
   req.premiumStatus = premium;
+  req.trialUsage = usage;
   next();
 }
 
@@ -3071,6 +3154,37 @@ function incrementUsage(key: string): { allowed: boolean; remaining: number; use
   return usageLimitFromRecord(record);
 }
 
+function consumeFreeUsageForRequest(req: Request): UsageInfo {
+  const usageContext = getFreeUsageContext(req);
+  if (usageContext.exempt) {
+    return {
+      allowed: true,
+      remaining: FREE_DAILY_LIMIT,
+      used: 0,
+      dailyLimit: FREE_DAILY_LIMIT,
+      unlimited: true,
+    };
+  }
+
+  const before = checkUsageLimit(usageContext.key);
+  if (!before.allowed) {
+    return {
+      allowed: false,
+      remaining: before.remaining,
+      used: before.used,
+      dailyLimit: before.dailyLimit,
+    };
+  }
+
+  const after = incrementUsage(usageContext.key);
+  return {
+    allowed: after.allowed,
+    remaining: after.remaining,
+    used: after.used,
+    dailyLimit: after.dailyLimit,
+  };
+}
+
 /**
  * GET /api/usage
  * Check remaining free uses
@@ -3092,6 +3206,98 @@ app.get('/api/usage', (req: Request, res: Response) => {
     remaining: limit.remaining,
     unlimited: false,
   });
+});
+
+app.post('/api/usage/consume', (req: Request, res: Response) => {
+  const usage = consumeFreeUsageForRequest(req);
+  if (!usage.allowed) {
+    return res.status(429).json({
+      error: '오늘 무료 이용 횟수를 모두 사용했습니다. 내일 다시 이용하거나 결제 후 이용해주세요.',
+      code: 'FREE_DAILY_LIMIT_EXCEEDED',
+      dailyLimit: usage.dailyLimit,
+      used: usage.used,
+      remaining: usage.remaining,
+      unlimited: Boolean(usage.unlimited),
+    });
+  }
+
+  res.json({
+    dailyLimit: usage.dailyLimit,
+    used: usage.used,
+    remaining: usage.remaining,
+    unlimited: Boolean(usage.unlimited),
+  });
+});
+
+app.post('/api/contact', async (req: Request, res: Response) => {
+  const body = req.body as Partial<ContactPayload>;
+  const name = sanitizeLine(typeof body.name === 'string' ? body.name : '', 120);
+  const email = sanitizeLine(typeof body.email === 'string' ? body.email : '', 320);
+  const subject = sanitizeLine(typeof body.subject === 'string' ? body.subject : '', 150);
+  const message = sanitizeMessage(typeof body.message === 'string' ? body.message : '', 5000);
+
+  if (!name) {
+    return res.status(400).json({ error: '성함을 입력해주세요.', code: 'CONTACT_NAME_REQUIRED' });
+  }
+  if (!email || !isValidEmail(email)) {
+    return res.status(400).json({ error: '연락 가능한 이메일을 입력해주세요.', code: 'CONTACT_EMAIL_INVALID' });
+  }
+  if (!subject) {
+    return res.status(400).json({ error: '제목을 입력해주세요.', code: 'CONTACT_SUBJECT_REQUIRED' });
+  }
+  if (!message || message.length < 3) {
+    return res.status(400).json({ error: '문의 내용을 3자 이상 입력해주세요.', code: 'CONTACT_MESSAGE_REQUIRED' });
+  }
+
+  if (!SMTP_HOST || !SMTP_FROM) {
+    return res.status(503).json({
+      error: '문의 전송이 현재 비활성화되어 있습니다.',
+      code: 'CONTACT_SMTP_NOT_CONFIGURED',
+    });
+  }
+
+  const senderIp = clientIpAddress(req) || 'unknown';
+  const session = getSessionFromRequest(req);
+  const userEmail = session?.user.email || '미로그인 사용자';
+  const text = [
+    `문의 접수`,
+    `이름: ${name}`,
+    `보내는 주소: ${email}`,
+    `로그인 계정: ${userEmail}`,
+    `IP: ${senderIp}`,
+    `제목: ${subject}`,
+    '',
+    message,
+  ].join('\n');
+  const html = [
+    `<strong>문의 접수</strong><br/>`,
+    `이름: ${escapeText(name)}<br/>`,
+    `보내는 주소: ${escapeText(email)}<br/>`,
+    `로그인 계정: ${escapeText(userEmail)}<br/>`,
+    `IP: ${escapeText(senderIp)}<br/>`,
+    `제목: ${escapeText(subject)}<br/><br/>`,
+    `<div style="white-space: pre-wrap;">${escapeText(message)}</div>`,
+  ].join('');
+
+  try {
+    const transporter = contactTransporter();
+    await transporter.verify();
+    await transporter.sendMail({
+      from: SMTP_FROM,
+      to: CONTACT_RECIPIENT_EMAIL,
+      replyTo: email,
+      subject: `${CONTACT_SUBJECT_PREFIX} ${subject}`,
+      text,
+      html,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[CONTACT] send failed:', err instanceof Error ? err.message : err);
+    res.status(500).json({
+      error: '문의 메일 전송에 실패했습니다. 잠시 후 다시 시도해주세요.',
+      code: 'CONTACT_SEND_FAILED',
+    });
+  }
 });
 
 // ============================================================

@@ -1,4 +1,5 @@
 import { useParams, Link } from 'react-router-dom'
+import { useEffect, useState } from 'react'
 import { getToolById } from '@/lib/tools'
 import { MaskingTool } from '@/components/tools/MaskingTool'
 import { StampTool } from '@/components/tools/StampTool'
@@ -9,10 +10,47 @@ import { ArrowLeft, Crown, Loader2, Lock, LogIn } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { useAuth } from '@/auth/AuthProvider'
 
+interface UsageSummary {
+  dailyLimit: number
+  remaining: number
+  used: number
+  unlimited?: boolean
+}
+
 export function ToolPage() {
   const { toolId } = useParams<{ toolId: string }>()
   const tool = toolId ? getToolById(toolId) : undefined
   const { loading, loggedIn, premium, isAdmin, login } = useAuth()
+  const [usage, setUsage] = useState<UsageSummary | null>(null)
+
+  useEffect(() => {
+    if (!tool?.isPremium) {
+      setUsage(null)
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await fetch('/api/usage', { credentials: 'include' })
+        const data = await res.json()
+        if (!cancelled && data && typeof data === 'object') {
+          setUsage({
+            dailyLimit: Number(data.dailyLimit) || 3,
+            remaining: Number(data.remaining) || 0,
+            used: Number(data.used) || 0,
+            unlimited: Boolean(data.unlimited),
+          })
+        }
+      } catch {
+        if (!cancelled) {
+          setUsage(null)
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [tool?.isPremium])
 
   if (!tool) {
     return (
@@ -40,7 +78,10 @@ export function ToolPage() {
     }
   }
 
-  const isBlockedPremiumTool = tool.isPremium && !isAdmin && !premium.isPremium
+  const trialUnlimited = usage?.unlimited === true
+  const trialRemaining = usage ? usage.remaining : 3
+  const premiumFreeEnabled = isAdmin || premium.isPremium || trialUnlimited || trialRemaining > 0
+  const isBlockedPremiumTool = tool.isPremium && !premiumFreeEnabled
 
   return (
     <div className="container mx-auto px-4 py-8 max-w-4xl">
@@ -82,9 +123,13 @@ export function ToolPage() {
             </div>
             <h2 className="mb-2 text-2xl font-bold">프리미엄 기능입니다</h2>
             <p className="mb-6 text-sm text-muted-foreground">
-              {loggedIn
-                ? '현재 계정에는 프리미엄 권한이 없습니다. 결제 후 서버 검증이 완료되면 바로 사용할 수 있습니다.'
-                : 'Google 로그인 후 건당 결제 또는 월 구독으로 이용할 수 있습니다.'}
+              {trialRemaining <= 0 && !trialUnlimited
+                ? '오늘 무료 이용 횟수를 모두 사용했습니다. 결제 후 계속 이용하거나 로그인해 구독/결제 혜택을 받아 이용해주세요.'
+                : '현재 계정은 프리미엄이 아니며 무료 체험 횟수 제한이 적용됩니다.'}
+              <br />
+              {trialUnlimited
+                ? '관리자/프리미엄 계정은 이용 제한 없이 사용 가능합니다.'
+                : `현재 남은 무료 횟수: ${Math.max(trialRemaining, 0)} / ${usage?.dailyLimit ?? 3}`}
             </p>
             <div className="flex flex-col justify-center gap-2 sm:flex-row">
               {!loggedIn && (

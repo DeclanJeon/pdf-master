@@ -19,6 +19,6 @@ assert.match(policy, /IP 주소/, 'Policy must disclose IP handling for quota/se
 assert.match(policy, /Polar\.sh/, 'Policy must disclose payment processor');
 assert.match(policy, /문서 파일/, 'Policy must disclose temporary document file processing');
 assert.match(policy, /10분 이내 자동 삭제/, 'Policy must disclose current temporary file retention');
-assert.match(policy, /refund@pdfm\.ponslink\.com/, 'Policy must include a contact address');
+assert.match(policy, /info@ponslink\.com/, 'Policy must include the configured contact address');
 
 console.log('privacy policy static contract passed');

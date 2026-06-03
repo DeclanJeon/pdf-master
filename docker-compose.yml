@@ -49,6 +49,15 @@ services:
       # Admin/operations config for WORK-14
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       ADMIN_AUDIT_LOG_PATH: ${ADMIN_AUDIT_LOG_PATH:-/app/data/admin-audit.log}
+
+      # Contact form SMTP settings (WORK-16)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASS: ${SMTP_PASS:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      CONTACT_EMAIL: ${CONTACT_EMAIL:-info@ponslink.com}
     volumes:
       - hwpforge-bin:/app/bin
       - pdfmaster-data:/app/data

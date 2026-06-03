@@ -8,6 +8,7 @@ import { SeoLandingPage } from '@/components/layout/SeoLandingPage'
 import { ToolPage } from '@/components/tools/ToolPage'
 import PaymentPage from '@/components/tools/PaymentPage'
 import AdminPage from '@/components/tools/AdminPage'
+import { ContactPage } from '@/components/layout/ContactPage'
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
         <main className="flex-1">
           <Routes>
             <Route path="/" element={<HomePage />} />
+            <Route path="/contact" element={<ContactPage />} />
             <Route path="/:slug" element={<SeoLandingPage />} />
             <Route path="/tool/:toolId" element={<ToolPage />} />
             <Route path="/pricing" element={<PaymentPage />} />

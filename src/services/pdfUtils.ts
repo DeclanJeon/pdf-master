@@ -30,6 +30,9 @@ const getPasswordApiErrorMessage = async (
   if (response.status === 403 && err.code === "PREMIUM_REQUIRED") {
     return "프리미엄 기능입니다. 결제 페이지에서 로그인/결제를 완료해주세요.";
   }
+  if (response.status === 429 && err.code === 'FREE_DAILY_LIMIT_EXCEEDED') {
+    return '오늘 무료 이용 횟수를 모두 사용했습니다. 내일 다시 이용하거나 결제 후 이용해주세요.';
+  }
   return err.error || fallback;
 };
 

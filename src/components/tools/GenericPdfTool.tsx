@@ -235,7 +235,7 @@ export function GenericPdfTool({ toolId, toolName }: { toolId: string; toolName:
           })
           if (!res.ok) {
             const err = await res.json().catch(() => ({ error: '변환 실패' }))
-            if (res.status === 403 && err.code === 'PREMIUM_REQUIRED') {
+            if ((res.status === 403 && err.code === 'PREMIUM_REQUIRED') || (res.status === 429 && err.code === 'FREE_DAILY_LIMIT_EXCEEDED')) {
               toast.error('프리미엄 기능입니다. 결제 페이지로 이동합니다.')
               window.setTimeout(() => { window.location.href = '/pricing' }, 800)
             }

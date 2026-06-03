@@ -49,6 +49,7 @@ assert.match(server, /UUID_PATTERN/, 'server must validate Polar product IDs as 
 assert.match(server, /POLAR_PRODUCT_ID_INVALID/, 'checkout must fail locally when a configured Polar product ID is malformed');
 assert.match(server, /must be a valid Polar product UUID/, 'production validation must reject malformed Polar product IDs');
 const envExample = fs.readFileSync('.env.example', 'utf8');
+const env = envExample;
 const compose = fs.readFileSync('docker-compose.yml', 'utf8');
 assert.match(envExample, /POLAR_ONE_TIME_PRODUCT_ID=3c5002d7-b5aa-4c8d-8fe4-433e8d46c239/, 'env example must wire the Polar one-time KRW product ID');
 assert.match(envExample, /POLAR_MONTHLY_PRODUCT_ID=d7cd5993-4d33-46d9-8ba6-994c70b527f9/, 'env example must wire the Polar monthly KRW product ID');
@@ -74,14 +75,34 @@ assert.doesNotMatch(server, /isOneTime \|\| !POLAR_MONTHLY_PRODUCT_ID/, 'missing
 
 // WORK-08: reusable server-side premium enforcement
 assert.match(server, /function requirePremium/, 'premium check must be reusable middleware');
-assert.match(server, /const isAdmin = isAdminEmail\(session\?\.user\.email\)/, 'admin users must bypass premium checks server-side');
-assert.match(server, /!isAdmin && !premium\.isPremium/, 'premium middleware must allow ADMIN_EMAILS users');
+assert.match(server, /const isAdmin = isAdminEmail\(session\?\.user\.email\)/, 'admin users must be detected in premium checks server-side');
+assert.match(server, /if \(isAdmin \|\| premium\.isPremium\)/, 'premium middleware must bypass checks for admin/premium users');
+assert.match(server, /FREE_DAILY_LIMIT_EXCEEDED/, 'premium feature usage must return free-tier daily-limit code on exceed');
 assert.match(server, /if \(isAdminEmail\(email\)\) return;/, 'admin users must not consume one-time passes');
 assert.match(server, /app\.post\('\/api\/encrypt',\s*requirePremium/, 'encrypt endpoint must enforce premium server-side');
 assert.match(server, /app\.post\('\/api\/decrypt',\s*requirePremium/, 'decrypt endpoint must enforce premium server-side');
 assert.match(server, /app\.post\('\/api\/convert\/pdf-to-hwp',\s*requirePremium/, 'pdf-to-hwp endpoint must enforce premium server-side');
-assert.match(server, /PREMIUM_REQUIRED/, 'unpaid users must get a deterministic 403 code');
 assert.match(server, /consumeOneTimePassForRequest/, 'one-time premium passes must be consumed after successful premium use');
+assert.match(server, /app\.get\('\/api\/usage',/, 'usage endpoint must be available for free-trial counters');
+assert.match(server, /app\.post\('\/api\/usage\/consume',/, 'usage consume endpoint must support deterministic per-request trial decrement');
+assert.match(server, /app\.post\('\/api\/contact'/, 'contact endpoint must be registered');
+assert.match(server, /CONTACT_SMTP_NOT_CONFIGURED/, 'contact endpoint must fail deterministically when SMTP is not configured');
+assert.match(server, /CONTACT_SEND_FAILED/, 'contact endpoint should report send failure on SMTP errors');
+assert.match(server, /CONTACT_RECIPIENT_EMAIL/, 'contact endpoint should use configured recipient email');
+assert.match(env, /SMTP_HOST=/, 'env example must document SMTP host');
+assert.match(env, /SMTP_PORT=/, 'env example must document SMTP port');
+assert.match(env, /SMTP_USER=/, 'env example must document SMTP user');
+assert.match(env, /SMTP_PASS=/, 'env example must document SMTP pass');
+assert.match(env, /SMTP_FROM=/, 'env example must document SMTP from');
+assert.match(env, /SMTP_SECURE=/, 'env example must document SMTP secure mode');
+assert.match(env, /CONTACT_EMAIL=/, 'env example must document contact recipient email');
+assert.match(compose, /SMTP_HOST:/, 'docker compose must pass SMTP_HOST');
+assert.match(compose, /SMTP_PORT:/, 'docker compose must pass SMTP_PORT');
+assert.match(compose, /SMTP_USER:/, 'docker compose must pass SMTP_USER');
+assert.match(compose, /SMTP_PASS:/, 'docker compose must pass SMTP_PASS');
+assert.match(compose, /SMTP_FROM:/, 'docker compose must pass SMTP_FROM');
+assert.match(compose, /SMTP_SECURE:/, 'docker compose must pass SMTP_SECURE');
+assert.match(compose, /CONTACT_EMAIL:/, 'docker compose must pass CONTACT_EMAIL');
 assert.match(server, /ownerEmail/, 'premium server-generated downloads must be tied to the requesting account');
 assert.match(server, /DOWNLOAD_FORBIDDEN/, "download endpoint must reject access to another user\'s premium job output");
 assert.match(server, /app\.get\('\/readyz'/, 'server must expose readiness endpoint for production probes');

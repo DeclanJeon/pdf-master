@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
-import { Shield, FileText, Zap, Crown, ShieldCheck, LogIn, LogOut, Loader2 } from 'lucide-react'
+import { Shield, FileText, Zap, Crown, ShieldCheck, LogIn, LogOut, Loader2, Mail } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge as UiBadge } from '@/components/ui/badge'
 import { useAuth } from '@/auth/AuthProvider'
@@ -33,6 +33,10 @@ export function Header() {
           <Link to="/pricing" className="flex items-center gap-1 text-yellow-600 hover:text-yellow-700 font-medium">
             <Crown className="h-4 w-4" />
             프리미엄
+          </Link>
+          <Link to="/contact" className="flex items-center gap-1 hover:text-red-600">
+            <Mail className="h-4 w-4" />
+            문의하기
           </Link>
           {isAdmin && (
             <Link to="/admin" className="flex items-center gap-1 hover:text-red-600">

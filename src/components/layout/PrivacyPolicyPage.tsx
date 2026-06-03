@@ -1,4 +1,4 @@
-const updatedAt = '2026-06-02'
+const updatedAt = '2026-06-04'
 
 const sections = [
   {
@@ -75,7 +75,7 @@ const sections = [
   {
     title: '9. 문의처',
     body: [
-      '개인정보, 환불, 서비스 이용 관련 문의: refund@pdfm.ponslink.com',
+      '개인정보, 환불, 서비스 이용 관련 문의: info@ponslink.com',
       '문의 시 본인 확인과 처리 이력 확인을 위해 Google 로그인 이메일 또는 결제 이메일을 요청할 수 있습니다.',
     ],
   },

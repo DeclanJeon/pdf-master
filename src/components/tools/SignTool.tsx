@@ -18,6 +18,13 @@ const toBlobPart = (bytes: Uint8Array): BlobPart =>
     ? bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
     : new Uint8Array(bytes).buffer
 
+interface UsageSummary {
+  dailyLimit: number
+  remaining: number
+  used: number
+  unlimited?: boolean
+}
+
 export function SignTool() {
   const [step, setStep] = useState<Step>('upload')
   const [file, setFile] = useState<File | null>(null)
@@ -35,6 +42,13 @@ export function SignTool() {
   const [isDraggingSign, setIsDraggingSign] = useState(false)
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
   const [signPreviewUrl, setSignPreviewUrl] = useState<string>('')  // 서명 미리보기 이미지
+  const [trialUsage, setTrialUsage] = useState<UsageSummary | null>(null)
+
+  const trialUsageText = trialUsage
+    ? trialUsage.unlimited
+      ? '무제한'
+      : `남은 무료 횟수: ${Math.max(trialUsage.remaining, 0)} / ${trialUsage.dailyLimit}`
+    : '남은 무료 횟수: 확인 중'
 
   // PDF 페이지를 이미지로 렌더링
   const renderPageImage = useCallback(async (bytes: Uint8Array) => {
@@ -69,6 +83,58 @@ export function SignTool() {
       toast.error('PDF 파일을 읽을 수 없습니다.')
     }
   }, [renderPageImage])
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await fetch('/api/usage', { credentials: 'include' })
+        const data = await res.json().catch(() => null)
+        if (!cancelled && data && typeof data === 'object') {
+          setTrialUsage({
+            dailyLimit: Number(data.dailyLimit) || 3,
+            remaining: Number(data.remaining) || 0,
+            used: Number(data.used) || 0,
+            unlimited: Boolean(data.unlimited),
+          })
+        }
+      } catch {
+        if (!cancelled) {
+          setTrialUsage(null)
+        }
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const consumeTrialUsage = async () => {
+    if (trialUsage?.unlimited) return true
+    try {
+      const res = await fetch('/api/usage/consume', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(typeof data.error === 'string' ? data.error : '무료 이용 횟수를 초과했습니다. 결제 후 이용해주세요.')
+        return false
+      }
+      setTrialUsage({
+        dailyLimit: Number(data.dailyLimit) || 3,
+        remaining: Number(data.remaining) || 0,
+        used: Number(data.used) || 0,
+        unlimited: Boolean(data.unlimited),
+      })
+      return true
+    } catch {
+      toast.error('요금제 상태 확인 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.')
+      return false
+    }
+  }
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -230,6 +296,8 @@ export function SignTool() {
   // ============================================================
   const handleSign = async () => {
     if (!file || !canvasRef.current || signPos === null) return
+    const canUseTrial = await consumeTrialUsage()
+    if (!canUseTrial) return
 
     const signCanvas = canvasRef.current
     setStep('processing')
@@ -298,6 +366,8 @@ export function SignTool() {
             </div>
           </div>
         </div>
+
+        <p className="mb-3 text-xs text-muted-foreground">{trialUsageText}</p>
 
         <div
           {...getRootProps()}
