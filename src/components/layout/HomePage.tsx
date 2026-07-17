@@ -1,9 +1,11 @@
 import type { ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   FileText, ShieldCheck, Stamp, Merge, Split, Image,
   Droplets, FileDown, Hash, Lock, Unlock, PenTool,
-  FileUp, ArrowRight, Sparkles, Clock3, MonitorSmartphone
+  FileUp, ArrowRight, Sparkles, Clock3, MonitorSmartphone,
+  ArrowDownRight, EyeOff
 } from 'lucide-react'
 import { tools, categoryLabels, categoryDescriptions } from '@/lib/tools'
 import type { ToolCategory } from '@/types'
@@ -19,60 +21,79 @@ export function HomePage() {
   return (
     <div>
       {/* 히어로 */}
-      <section className="relative overflow-hidden border-b border-red-100/70 bg-[radial-gradient(circle_at_top_left,_rgba(220,38,38,0.12),_transparent_42%),linear-gradient(180deg,#fff7f7_0%,#ffffff_55%,#fafaf9_100%)] py-16 md:py-24">
-        <div className="pointer-events-none absolute -right-16 top-8 h-56 w-56 rounded-full bg-red-200/30 blur-3xl" />
-        <div className="pointer-events-none absolute -left-10 bottom-0 h-40 w-40 rounded-full bg-amber-100/50 blur-3xl" />
+      <section className="hero-stage relative overflow-hidden border-b border-red-100/70 py-16 md:py-24">
+        <div className="hero-grid pointer-events-none absolute inset-0" aria-hidden />
+        <div className="pointer-events-none absolute -right-20 top-0 h-72 w-72 rounded-full bg-red-300/25 blur-3xl hero-orb" aria-hidden />
+        <div className="pointer-events-none absolute -left-16 bottom-0 h-56 w-56 rounded-full bg-amber-200/40 blur-3xl hero-orb-delay" aria-hidden />
+        <div className="pointer-events-none absolute left-1/2 top-10 h-40 w-40 -translate-x-1/2 rounded-full bg-rose-200/30 blur-3xl" aria-hidden />
 
         <div className="container relative mx-auto px-4">
-          <div className="mx-auto max-w-4xl text-center">
-            <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-red-100 bg-white/80 px-4 py-1.5 text-sm font-medium text-red-700 shadow-sm backdrop-blur">
-              <ShieldCheck className="h-4 w-4" />
-              브라우저 처리 + 필요한 서버 변환 분리
+          <div className="grid items-center gap-12 lg:grid-cols-[1.05fr_0.95fr]">
+            <div className="hero-copy max-w-2xl text-center lg:text-left">
+              <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-red-100 bg-white/85 px-3.5 py-1.5 text-xs font-semibold tracking-wide text-red-700 shadow-sm backdrop-blur sm:text-sm">
+                <span className="relative flex h-2 w-2">
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-60" />
+                  <span className="relative inline-flex h-2 w-2 rounded-full bg-red-600" />
+                </span>
+                한국 문서 업무를 위한 PDF 워크스페이스
+              </div>
+
+              <h1 className="text-4xl font-bold tracking-tight text-stone-900 sm:text-5xl md:text-[3.4rem] md:leading-[1.08]">
+                한국 문서를
+                <br className="hidden sm:block" />
+                <span className="bg-gradient-to-r from-red-600 via-rose-500 to-orange-500 bg-clip-text text-transparent">
+                  바로 제출 가능한 PDF
+                </span>
+                로
+              </h1>
+
+              <p className="mt-5 text-base leading-7 text-stone-600 sm:text-lg sm:leading-8">
+                한글 파일 변환, 주민번호 가리기, 도장 찍기.
+                <span className="font-semibold text-stone-800"> 해외 도구가 빠뜨린 일을 한 화면에서.</span>
+              </p>
+
+              <div className="mt-5 flex flex-wrap items-center justify-center gap-2 lg:justify-start" aria-live="polite">
+                <span className="text-sm font-medium text-stone-500">지금 바로</span>
+                <HeroRotator />
+              </div>
+
+              <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row lg:justify-start">
+                <Link
+                  to="/hwp-to-pdf"
+                  className="group inline-flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/25 transition hover:-translate-y-0.5 hover:bg-red-700 sm:w-auto"
+                >
+                  <FileText className="h-5 w-5" />
+                  HWP → PDF 변환
+                  <ArrowRight className="h-4 w-4 transition group-hover:translate-x-0.5" />
+                </Link>
+                <Link
+                  to="/pdf-rrn-mask"
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-white/90 px-6 py-3.5 text-sm font-semibold text-red-700 backdrop-blur transition hover:bg-red-50 sm:w-auto"
+                >
+                  <ShieldCheck className="h-5 w-5" />
+                  주민번호 마스킹
+                </Link>
+                <Link
+                  to="/pdf-stamp"
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white/80 px-6 py-3.5 text-sm font-semibold text-stone-700 transition hover:bg-stone-50 sm:w-auto"
+                >
+                  <Stamp className="h-5 w-5" />
+                  도장 삽입
+                </Link>
+              </div>
+
+              <div className="mt-7 flex flex-wrap items-center justify-center gap-2 text-xs text-stone-500 sm:text-sm lg:justify-start">
+                <TrustChip icon={<Sparkles className="h-3.5 w-3.5" />} label="한국 문서 특화" />
+                <TrustChip icon={<Clock3 className="h-3.5 w-3.5" />} label="무료 하루 3회" />
+                <TrustChip icon={<MonitorSmartphone className="h-3.5 w-3.5" />} label="설치 없이 사용" />
+              </div>
+
+              <p className="mt-5 text-xs leading-5 text-stone-500 sm:text-sm">
+                마스킹·도장은 브라우저에서, HWP 변환·암호 처리는 서버에서 임시 처리 후 정리합니다.
+              </p>
             </div>
 
-            <h1 className="text-4xl font-bold tracking-tight text-stone-900 sm:text-5xl md:text-6xl">
-              한국인을 위해 만든
-              <br />
-              <span className="bg-gradient-to-r from-red-600 to-rose-500 bg-clip-text text-transparent">
-                PDF 도구
-              </span>
-            </h1>
-
-            <p className="mx-auto mt-6 max-w-2xl text-base leading-7 text-stone-600 sm:text-lg sm:leading-8">
-              한글(HWP/HWPX) PDF 변환, PDF 주민번호 마스킹, 도장·인감 삽입 —
-              글로벌 도구가 못 하는 한국 특화 기능을 한 곳에.
-              PDF 편집은 가능한 한 브라우저에서, HWP 변환처럼 필요한 기능은 서버에서 임시 처리합니다.
-            </p>
-
-            <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
-              <Link
-                to="/hwp-to-pdf"
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-red-600/20 transition hover:bg-red-700 sm:w-auto"
-              >
-                <FileText className="h-5 w-5" />
-                한글 HWP PDF 변환
-              </Link>
-              <Link
-                to="/pdf-rrn-mask"
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-red-200 bg-white px-6 py-3.5 text-sm font-semibold text-red-700 transition hover:bg-red-50 sm:w-auto"
-              >
-                <ShieldCheck className="h-5 w-5" />
-                주민번호 마스킹
-              </Link>
-              <Link
-                to="/pdf-stamp"
-                className="inline-flex w-full items-center justify-center gap-2 rounded-xl border border-stone-200 bg-white px-6 py-3.5 text-sm font-semibold text-stone-700 transition hover:bg-stone-50 sm:w-auto"
-              >
-                <Stamp className="h-5 w-5" />
-                도장 삽입
-              </Link>
-            </div>
-
-            <div className="mt-8 flex flex-wrap items-center justify-center gap-2 text-xs text-stone-500 sm:text-sm">
-              <TrustChip icon={<Sparkles className="h-3.5 w-3.5" />} label="한국 문서 특화" />
-              <TrustChip icon={<Clock3 className="h-3.5 w-3.5" />} label="무료 하루 3회" />
-              <TrustChip icon={<MonitorSmartphone className="h-3.5 w-3.5" />} label="설치 없이 바로 사용" />
-            </div>
+            <HeroMotionGraphic />
           </div>
         </div>
       </section>
@@ -265,6 +286,132 @@ export function HomePage() {
           </p>
         </div>
       </section>
+    </div>
+  )
+}
+
+
+const heroPhrases = [
+  { label: '한글 HWP/HWPX 변환', icon: FileText, tone: 'text-red-700 bg-red-50 ring-red-100' },
+  { label: '주민번호 자동 마스킹', icon: EyeOff, tone: 'text-emerald-700 bg-emerald-50 ring-emerald-100' },
+  { label: '도장·인감 한 번에 삽입', icon: Stamp, tone: 'text-amber-700 bg-amber-50 ring-amber-100' },
+] as const
+
+function HeroRotator() {
+  const [index, setIndex] = useState(0)
+  const [visible, setVisible] = useState(true)
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setVisible(false)
+      window.setTimeout(() => {
+        setIndex((prev) => (prev + 1) % heroPhrases.length)
+        setVisible(true)
+      }, 220)
+    }, 2400)
+    return () => window.clearInterval(id)
+  }, [])
+
+  const active = heroPhrases[index]
+  const Icon = active.icon
+
+  return (
+    <span
+      className={`inline-flex min-w-[15.5rem] items-center justify-center gap-2 rounded-full px-3.5 py-1.5 text-sm font-semibold ring-1 transition-all duration-300 sm:min-w-[17rem] ${active.tone} ${
+        visible ? 'translate-y-0 opacity-100' : 'translate-y-1 opacity-0'
+      }`}
+    >
+      <Icon className="h-4 w-4" />
+      {active.label}
+    </span>
+  )
+}
+
+function HeroMotionGraphic() {
+  return (
+    <div className="hero-graphic relative mx-auto w-full max-w-md lg:max-w-none" aria-hidden>
+      <div className="absolute -inset-4 rounded-[2rem] bg-gradient-to-br from-red-100/70 via-white to-amber-50/80 blur-sm" />
+      <div className="relative overflow-hidden rounded-[1.75rem] border border-white/80 bg-white/80 p-5 shadow-[0_30px_80px_-40px_rgba(185,28,28,0.55)] backdrop-blur">
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="h-2.5 w-2.5 rounded-full bg-red-400" />
+            <span className="h-2.5 w-2.5 rounded-full bg-amber-300" />
+            <span className="h-2.5 w-2.5 rounded-full bg-emerald-300" />
+          </div>
+          <span className="rounded-full bg-stone-100 px-2.5 py-1 text-[11px] font-semibold tracking-wide text-stone-500">
+            LIVE PREVIEW
+          </span>
+        </div>
+
+        <div className="relative h-[300px] sm:h-[320px]">
+          {/* HWP card */}
+          <div className="doc-card doc-card-hwp absolute left-2 top-4 w-[46%] rounded-2xl border border-stone-200 bg-gradient-to-br from-stone-50 to-white p-3 shadow-md">
+            <div className="mb-3 flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-stone-900 text-[10px] font-bold text-white">
+                HWP
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-stone-800">보고서.hwp</p>
+                <p className="text-[10px] text-stone-400">한글 원본</p>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <div className="h-2 w-full rounded bg-stone-200/90" />
+              <div className="h-2 w-[80%] rounded bg-stone-200/80" />
+              <div className="h-2 w-[75%] rounded bg-stone-200/70" />
+              <div className="mt-3 grid grid-cols-3 gap-1">
+                <div className="h-8 rounded bg-stone-100" />
+                <div className="h-8 rounded bg-stone-100" />
+                <div className="h-8 rounded bg-stone-100" />
+              </div>
+            </div>
+          </div>
+
+          {/* flow arrow */}
+          <div className="flow-chip absolute left-1/2 top-[42%] z-20 flex -translate-x-1/2 -translate-y-1/2 items-center gap-1 rounded-full bg-red-600 px-3 py-1.5 text-[11px] font-bold text-white shadow-lg shadow-red-600/30">
+            변환
+            <ArrowDownRight className="h-3.5 w-3.5" />
+          </div>
+
+          {/* PDF card */}
+          <div className="doc-card doc-card-pdf absolute bottom-3 right-1 w-[52%] rounded-2xl border border-red-100 bg-gradient-to-br from-white to-red-50 p-3 shadow-xl">
+            <div className="mb-3 flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-red-600 text-[10px] font-bold text-white">
+                PDF
+              </div>
+              <div>
+                <p className="text-xs font-semibold text-stone-800">보고서.pdf</p>
+                <p className="text-[10px] text-red-500">제출 준비 완료</p>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <div className="h-2 w-full rounded bg-red-100" />
+              <div className="relative h-2 w-[83%] overflow-hidden rounded bg-red-100">
+                <span className="mask-bar absolute inset-y-0 left-1/4 w-1/3 rounded bg-stone-800/80" />
+              </div>
+              <div className="h-2 w-[66%] rounded bg-red-100" />
+              <div className="mt-3 flex items-end justify-between">
+                <div className="space-y-1">
+                  <div className="h-1.5 w-16 rounded bg-red-100" />
+                  <div className="h-1.5 w-12 rounded bg-red-100" />
+                </div>
+                <div className="stamp-seal relative flex h-12 w-12 items-center justify-center rounded-full border-2 border-red-500/80 text-[9px] font-black tracking-tighter text-red-600">
+                  직인
+                  <span className="absolute inset-1 rounded-full border border-red-400/50" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* floating chips */}
+          <div className="float-chip absolute right-2 top-2 rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-700 shadow-sm">
+            마스킹 적용
+          </div>
+          <div className="float-chip-delay absolute bottom-24 left-1 rounded-full border border-amber-100 bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-700 shadow-sm">
+            도장 완료
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
