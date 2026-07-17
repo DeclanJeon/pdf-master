@@ -15,11 +15,16 @@ const helper = server.slice(helperStart, helperEnd);
 
 assert.match(server, /const PDFUNITE_PATH = process\.env\.PDFUNITE_PATH \|\| 'pdfunite';/, 'server must configure pdfunite');
 assert.match(helper, /fs\.mkdirSync\(svgDir, \{ recursive: true \}\);[\s\S]*fs\.mkdirSync\(pagePdfDir, \{ recursive: true \}\);/, 'rhwp SVG helper must create SVG and page-PDF output dirs');
-assert.match(helper, /execFileAsync\(RHWP_PATH, \['export-svg', inputPath, '-o', svgDir, '--font-style'\]/, 'rhwp SVG helper must render original HWP pages with rhwp export-svg');
+assert.match(helper, /execFileAsync\(RHWP_PATH, \['export-svg', inputPath, '-o', svgDir, '--font-style', '--embed-fonts'\]/, 'rhwp SVG helper must render original HWP pages with rhwp export-svg and embed fonts');
+assert.match(helper, /SVG_TO_SEARCHABLE_PDF_SCRIPT_PATH/, 'rhwp SVG helper must prefer searchable SVG→PDF reconstruction');
+assert.match(helper, /searchable SVG→PDF via PyMuPDF/, 'rhwp SVG helper must log the searchable PyMuPDF path');
 assert.match(helper, /filter\(\(name\) => name\.toLowerCase\(\)\.endsWith\('\.svg'\)\)[\s\S]*localeCompare\(b, undefined, \{ numeric: true \}\)/, 'rhwp SVG helper must read generated SVG pages in sorted order');
 assert.match(helper, /execFileAsync\(IMAGEMAGICK_PATH, \['-density', '96', renderableSvgPath, pagePdfPath\]/, 'rhwp SVG helper must convert each sanitized SVG page through ImageMagick magick at 96dpi');
 assert.match(helper, /execFileAsync\(PDFUNITE_PATH, \[\.\.\.pagePdfPaths, outputPath\]/, 'rhwp SVG helper must merge page PDFs with pdfunite');
 assert.match(helper, /fs\.existsSync\(outputPath\)[\s\S]*fs\.statSync\(outputPath\)\.size === 0/, 'rhwp SVG helper must verify the merged PDF exists and is non-empty');
+assert.match(server, /function resolveRhwpPath\(\)/, 'server must resolve rhwp path with local cargo fallback');
+assert.match(server, /LOCAL_RHWP_PATH/, 'server must know the local cargo rhwp path');
+assert.match(route, /HWPX\/HTML HWP→PDF 결과가 빈 페이지 PDF입니다/, 'HWP→PDF HTML fallback must reject blank PDF outputs');
 
 const directIndex = route.indexOf('LibreOffice direct HWP→PDF');
 const rhwpIndex = route.indexOf('convertHwpToPdfWithRhwpSvg(inputPath, jobDir, pdfPath)');

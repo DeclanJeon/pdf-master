@@ -19,6 +19,10 @@ services:
       PDFTOPPM_PATH: ${PDFTOPPM_PATH:-pdftoppm}
       QPDF_PATH: qpdf
       GHOSTSCRIPT_PATH: gs
+      PDF2DOCX_LAYOUT_MODE: ${PDF2DOCX_LAYOUT_MODE:-faithful}
+      PDF_HWP_PRIMARY_PIPELINE: ${PDF_HWP_PRIMARY_PIPELINE:-pymupdf-native}
+      PDF_LAYOUT_EXTRACT_SCRIPT_PATH: /app/scripts/pdf_layout_extract.py
+      SVG_TO_SEARCHABLE_PDF_SCRIPT_PATH: /app/scripts/svg_to_searchable_pdf.py
 
       # Google OAuth/session config expected by WORK-01 server implementation
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://pdfm.ponslink.com}

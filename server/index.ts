@@ -32,7 +32,21 @@ const HWPFORGE_PATH = !IS_PRODUCTION && HWPFORGE_ENV_PATH === LEGACY_LOCAL_HWPFO
 const SOFFICE_PATH = process.env.SOFFICE_PATH || 'soffice';
 const HWPX2HTML_PATH = process.env.HWPX2HTML_PATH || path.resolve(__dirname, 'hwpx2html.py');
 const MD2HTML_PATH = process.env.MD2HTML_PATH || path.resolve(__dirname, '../scripts/md2html.py');
-const RHWP_PATH = process.env.RHWP_PATH || 'rhwp';
+const LOCAL_RHWP_PATH = path.resolve(process.env.HOME || '', '.cargo/bin/rhwp');
+function resolveRhwpPath(): string {
+  const configured = (process.env.RHWP_PATH || '').trim();
+  if (configured) {
+    if (configured.includes(path.sep) || configured.startsWith('.')) {
+      const absolute = path.resolve(configured);
+      if (fs.existsSync(absolute)) return absolute;
+    } else if (commandAvailable(configured)) {
+      return configured;
+    }
+  }
+  if (fs.existsSync(LOCAL_RHWP_PATH)) return LOCAL_RHWP_PATH;
+  return configured || 'rhwp';
+}
+const RHWP_PATH = resolveRhwpPath();
 const LOCAL_RHWP_INGEST_EXPORTER_PATH = path.resolve(__dirname, '../tools/rhwp-ingest-exporter/target/release/rhwp-ingest-exporter');
 const RHWP_INGEST_EXPORTER_PATH = process.env.RHWP_INGEST_EXPORTER_PATH
   || (fs.existsSync(LOCAL_RHWP_INGEST_EXPORTER_PATH) ? LOCAL_RHWP_INGEST_EXPORTER_PATH : 'rhwp-ingest-exporter');
@@ -40,12 +54,15 @@ const PDFTOTEXT_PATH = process.env.PDFTOTEXT_PATH || 'pdftotext';
 const PDFTOHTML_PATH = process.env.PDFTOHTML_PATH || 'pdftohtml';
 const PDFTOPPM_PATH = process.env.PDFTOPPM_PATH || 'pdftoppm';
 const PDF2DOCX_SCRIPT_PATH = process.env.PDF2DOCX_SCRIPT_PATH || path.resolve(__dirname, '../scripts/pdf_to_docx.py');
+const PDF_LAYOUT_EXTRACT_SCRIPT_PATH = process.env.PDF_LAYOUT_EXTRACT_SCRIPT_PATH || path.resolve(__dirname, '../scripts/pdf_layout_extract.py');
+const SVG_TO_SEARCHABLE_PDF_SCRIPT_PATH = process.env.SVG_TO_SEARCHABLE_PDF_SCRIPT_PATH
+  || path.resolve(__dirname, '../scripts/svg_to_searchable_pdf.py');
 const PDF2DOCX_MODE_CANDIDATE = process.env.PDF2DOCX_LAYOUT_MODE || process.env.PDF2DOCX_MODE || 'faithful';
 const PDF2DOCX_LAYOUT_MODE = ['faithful', 'editable', 'absolute'].includes(PDF2DOCX_MODE_CANDIDATE)
   ? PDF2DOCX_MODE_CANDIDATE
   : 'faithful';
 const ODT_TO_HWPX_SCRIPT_PATH = process.env.ODT_TO_HWPX_SCRIPT_PATH || path.resolve(__dirname, '../scripts/odt_to_hwpx.py');
-const PDF_HWP_PRIMARY_PIPELINE = process.env.PDF_HWP_PRIMARY_PIPELINE || 'pdf2docx-docx';
+const PDF_HWP_PRIMARY_PIPELINE = process.env.PDF_HWP_PRIMARY_PIPELINE || 'pymupdf-native';
 const QPDF_PATH = process.env.QPDF_PATH || 'qpdf';
 const GHOSTSCRIPT_PATH = process.env.GHOSTSCRIPT_PATH || process.env.GS_PATH || 'gs';
 const IMAGEMAGICK_PATH = process.env.IMAGEMAGICK_PATH || process.env.MAGICK_PATH || 'magick';
@@ -815,7 +832,7 @@ async function convertHwpToPdfWithRhwpSvg(inputPath: string, jobDir: string, out
   fs.mkdirSync(svgDir, { recursive: true });
   fs.mkdirSync(pagePdfDir, { recursive: true });
 
-  await execFileAsync(RHWP_PATH, ['export-svg', inputPath, '-o', svgDir, '--font-style'], {
+  await execFileAsync(RHWP_PATH, ['export-svg', inputPath, '-o', svgDir, '--font-style', '--embed-fonts'], {
     timeout: 120000,
     env: { ...process.env, LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8' },
   });
@@ -830,6 +847,36 @@ async function convertHwpToPdfWithRhwpSvg(inputPath: string, jobDir: string, out
   }
 
   const sourceSvgTextElementCount = svgFiles.reduce((sum, svgPath) => sum + countSvgTextElements(svgPath), 0);
+
+  // Prefer PyMuPDF reconstruction so per-glyph rhwp SVG text remains searchable.
+  // Chrome print-to-pdf keeps visuals but often splits words (APPLICATION -> APPLI CATI ON).
+  if (fs.existsSync(SVG_TO_SEARCHABLE_PDF_SCRIPT_PATH)) {
+    try {
+      console.log(`[METHOD3] Trying searchable SVG→PDF via PyMuPDF jobDir=${path.basename(jobDir)}`);
+      await execFileAsync(PYTHON_PATH, [
+        SVG_TO_SEARCHABLE_PDF_SCRIPT_PATH,
+        svgDir,
+        '-o', outputPath,
+      ], {
+        timeout: 120000,
+        maxBuffer: 20 * 1024 * 1024,
+        env: { ...process.env, LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8' },
+      });
+      if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+        if (sourceSvgTextElementCount > 0) {
+          const textCharCount = countPdfExtractableTextChars(outputPath);
+          if (textCharCount !== null && textCharCount === 0) {
+            throw new Error('searchable SVG→PDF produced an empty-text PDF');
+          }
+        }
+        return;
+      }
+      throw new Error('searchable SVG→PDF output missing');
+    } catch (searchableErr) {
+      console.warn(`[METHOD3] searchable SVG→PDF failed: ${searchableErr instanceof Error ? searchableErr.message : searchableErr}; falling back to Chrome/ImageMagick`);
+      try { if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath); } catch { /* skip */ }
+    }
+  }
 
   const pagePdfPaths: string[] = [];
   for (const [index, svgPath] of svgFiles.entries()) {
@@ -1039,6 +1086,8 @@ interface PdfLayoutTextLine {
   y: number;
   width: number;
   height: number;
+  baseline?: number;
+  natural_width?: number;
   font_family: string;
   font_size: number;
   bold: boolean;
@@ -1058,7 +1107,7 @@ interface PdfLayoutPage {
   background?: PdfPageImage;
   images: PdfLayoutImage[];
   lines: PdfLayoutTextLine[];
-  boxes: Array<{ x: number; y: number; width: number; height: number; stroke?: string; fill?: string }>;
+  boxes: Array<{ x: number; y: number; width: number; height: number; stroke?: string; fill?: string; stroke_width?: number }>;
   tables?: PdfLayoutTable[];
 }
 
@@ -1372,21 +1421,23 @@ for page in doc:
     boxes = []
     for drawing in page.get_drawings():
         fill = color_to_hex(drawing.get('fill'))
-        if not fill:
-            continue
+        stroke = color_to_hex(drawing.get('color'))
         rect = drawing.get('rect')
         if rect is None:
             continue
         width = float(rect.x1 - rect.x0)
         height = float(rect.y1 - rect.y0)
-        if width <= 1 or height <= 1:
+        keep = (width >= 5 and height >= 0.3) or (height >= 5 and width >= 0.3) or (width > 1 and height > 1)
+        if not keep:
             continue
+        if not fill and not stroke:
+            stroke = '#000000'
         boxes.append({
             'x': float(rect.x0),
             'y': float(rect.y0),
             'width': width,
             'height': height,
-            'stroke': color_to_hex(drawing.get('color')),
+            'stroke': stroke,
             'fill': fill,
         })
     lines = []
@@ -1832,6 +1883,129 @@ async function createRhwpIngestFromPdf2DocxPipeline(inputPath: string, jobDir: s
   const odtExtractDir = path.join(jobDir, 'docx-odt-extract');
   await extractOdtArchive(odtPath, odtExtractDir);
   return createRhwpIngestFromLibreOfficeOdt(odtExtractDir, jobDir);
+}
+
+async function createRhwpIngestFromPyMuPdfLayout(inputPath: string, jobDir: string): Promise<PdfLayoutIngest> {
+  if (!fs.existsSync(PDF_LAYOUT_EXTRACT_SCRIPT_PATH)) {
+    throw new Error(`PDF layout extractor missing: ${PDF_LAYOUT_EXTRACT_SCRIPT_PATH}`);
+  }
+  const layoutJsonPath = path.join(jobDir, 'pymupdf-layout.json');
+  await execFileAsync(PYTHON_PATH, [
+    PDF_LAYOUT_EXTRACT_SCRIPT_PATH,
+    inputPath,
+    '--media-dir', jobDir,
+    '-o', layoutJsonPath,
+  ], {
+    timeout: 120000,
+    maxBuffer: 20 * 1024 * 1024,
+    env: { ...process.env, LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8' },
+  });
+  if (!fs.existsSync(layoutJsonPath) || fs.statSync(layoutJsonPath).size === 0) {
+    throw new Error('PyMuPDF PDF layout JSON이 생성되지 않았습니다.');
+  }
+
+  const parsed = JSON.parse(fs.readFileSync(layoutJsonPath, 'utf8')) as {
+    unit?: string;
+    glyph_unit?: string;
+    pages?: Array<{
+      width: number;
+      height: number;
+      lines?: PdfLayoutTextLine[];
+      glyphs?: Array<{
+        text: string;
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        baseline?: number;
+        font_family?: string;
+        font_size?: number;
+        bold?: boolean;
+        color?: string;
+      }>;
+      boxes?: Array<{
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+        stroke?: string;
+        fill?: string;
+        stroke_width?: number;
+      }>;
+      images?: Array<{ id: string; x: number; y: number; width: number; height: number; natural_w?: number; natural_h?: number }>;
+      tables?: PdfLayoutTable[];
+    }>;
+  };
+  const sourcePages = Array.isArray(parsed.pages) ? parsed.pages : [];
+  if (sourcePages.length === 0) {
+    throw new Error('PyMuPDF PDF layout에 페이지가 없습니다.');
+  }
+
+  // Prefer per-glyph advances when extractor provides them. This preserves PDF
+  // character positions much more tightly than whole-line textboxes.
+  const useGlyphLayout = sourcePages.some((page) => Array.isArray(page.glyphs) && page.glyphs.length > 0);
+  const layoutUnit = useGlyphLayout ? (parsed.glyph_unit || 'pdfglyph') : (parsed.unit || 'pdfpt');
+
+  const orderedPages: PdfLayoutPage[] = sourcePages.map((page) => {
+    const sourceLines = useGlyphLayout && Array.isArray(page.glyphs) && page.glyphs.length > 0
+      ? page.glyphs
+      : (page.lines || []);
+    return {
+      width: Number(page.width) || DEFAULT_HWP_PAGE_SIZE_MM.width_mm * 96 / 25.4,
+      height: Number(page.height) || DEFAULT_HWP_PAGE_SIZE_MM.height_mm * 96 / 25.4,
+      images: (page.images || []).map((image) => ({
+        id: image.id,
+        natural_w: image.natural_w || Math.max(1, Math.round(image.width)),
+        natural_h: image.natural_h || Math.max(1, Math.round(image.height)),
+        x: image.x,
+        y: image.y,
+        width: image.width,
+        height: image.height,
+      })),
+      lines: sourceLines.map((line: any) => ({
+        text: line.text,
+        x: line.x,
+        y: line.y,
+        width: line.width,
+        height: line.height,
+        baseline: line.baseline,
+        font_family: line.font_family || '함초롬바탕',
+        font_size: line.font_size || Math.max(8, (line.height || 10) * 0.72),
+        bold: Boolean(line.bold),
+        color: line.color || '#000000',
+      })),
+      boxes: (page.boxes || []).map((box) => ({
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height,
+        stroke: box.stroke,
+        fill: box.fill,
+        stroke_width: box.stroke_width,
+      })),
+      // Structured tables are useful for non-glyph editable layout, but native
+      // HWP table cells do not match PDF absolute glyph positions. Prefer free
+      // boxes+glyphs when unit=pdfglyph.
+      tables: (!useGlyphLayout && Array.isArray((page as any).tables)) ? (page as any).tables : [],
+    };
+  });
+
+  // PyMuPDF layout coordinates are PDF points (1/72"). Do not use the CSS-px (96dpi) helper.
+  const pageSizeMm = {
+    width_mm: Number(((orderedPages[0].width * 25.4) / 72).toFixed(3)),
+    height_mm: Number(((orderedPages[0].height * 25.4) / 72).toFixed(3)),
+  };
+  const fallbackText = 'PDF에서 추출 가능한 텍스트가 없습니다. 스캔 이미지 PDF는 OCR 단계가 필요합니다.';
+  const ingest = createRhwpIngestFromPdfText(
+    orderedPages.map((page) => page.lines.map((line) => line.text).join('\n').trim() || fallbackText),
+    pageSizeMm,
+  ) as PdfLayoutIngest;
+  ingest.pdf_layout = {
+    unit: layoutUnit,
+    visual_mode: 'editable-native',
+    pages: orderedPages,
+  };
+  return ingest;
 }
 
 function createRhwpIngestFromLibreOfficeOdt(odtExtractDir: string, jobDir: string): PdfLayoutIngest {
@@ -3011,6 +3185,12 @@ app.post('/api/convert/hwp-to-pdf', upload.single('file'), async (req: Request, 
         }
       }
 
+      // Reject blank PDF produced by the HTML reconstruction fallback.
+      const textCharCount = countPdfExtractableTextChars(pdfPath);
+      if (textCharCount !== null && textCharCount === 0) {
+        throw new Error('HWPX/HTML HWP→PDF 결과가 빈 페이지 PDF입니다. 상위 변환 경로를 확인하세요.');
+      }
+
       // Cleanup input
       try { fs.unlinkSync(inputPath); } catch { /* skip */ }
 
@@ -3536,6 +3716,7 @@ app.post('/api/convert/pdf-to-hwp', requirePremium, upload.single('file'), async
   const missing: string[] = [];
   if (!commandAvailable(RHWP_INGEST_EXPORTER_PATH)) missing.push('rhwp-ingest-exporter');
   if (!commandAvailable(PYTHON_PATH, ['-c', 'import fitz'])) missing.push('python3-pymupdf(PyMuPDF)');
+  if (!fs.existsSync(PDF_LAYOUT_EXTRACT_SCRIPT_PATH)) missing.push('pdf_layout_extract.py');
   if (PDF_HWP_PRIMARY_PIPELINE === 'pdf2docx-docx') {
     if (!fs.existsSync(PDF2DOCX_SCRIPT_PATH)) missing.push('pdf_to_docx.py');
     if (!commandAvailable(PYTHON_PATH, ['-c', 'import pdf2docx'])) missing.push('pdf2docx');
@@ -3566,7 +3747,15 @@ app.post('/api/convert/pdf-to-hwp', requirePremium, upload.single('file'), async
 
     let ingest: PdfLayoutIngest | null = null;
 
-    if (PDF_HWP_PRIMARY_PIPELINE === 'pdf2docx-docx') {
+    if (PDF_HWP_PRIMARY_PIPELINE === 'pymupdf-native') {
+      try {
+        ingest = await createRhwpIngestFromPyMuPdfLayout(inputPath, jobDir);
+      } catch (nativeErr) {
+        console.warn(`[PDF→HWP] pymupdf-native path failed; trying pdf2docx→DOCX: ${nativeErr instanceof Error ? nativeErr.message : nativeErr}`);
+      }
+    }
+
+    if (!ingest && (PDF_HWP_PRIMARY_PIPELINE === 'pdf2docx-docx' || PDF_HWP_PRIMARY_PIPELINE === 'pymupdf-native')) {
       try {
         ingest = await createRhwpIngestFromPdf2DocxPipeline(inputPath, jobDir);
       } catch (docxErr) {
@@ -3677,6 +3866,7 @@ function dependencyStatus() {
     pythonPyMuPDF: commandAvailable(PYTHON_PATH, ['-c', 'import fitz']),
     pdf2docx: commandAvailable(PYTHON_PATH, ['-c', 'import pdf2docx']),
     pdf2docxScript: fs.existsSync(PDF2DOCX_SCRIPT_PATH),
+    pdfLayoutExtractScript: fs.existsSync(PDF_LAYOUT_EXTRACT_SCRIPT_PATH),
     pdf2docxMode: PDF2DOCX_LAYOUT_MODE,
     pdfToHwpPrimaryPipeline: PDF_HWP_PRIMARY_PIPELINE,
   };
@@ -3732,6 +3922,7 @@ app.listen(PORT, () => {
   console.log(`  python-pymupdf: ${PYTHON_PATH} (${commandAvailable(PYTHON_PATH, ['-c', 'import fitz']) ? 'OK' : 'MISSING'})`);
   console.log(`  pdf2docx: ${PYTHON_PATH} (${commandAvailable(PYTHON_PATH, ['-c', 'import pdf2docx']) ? 'OK' : 'MISSING'})`);
   console.log(`  pdf2docx-script: ${PDF2DOCX_SCRIPT_PATH} (${fs.existsSync(PDF2DOCX_SCRIPT_PATH) ? 'OK' : 'MISSING'})`);
+  console.log(`  pdf-layout-extract: ${PDF_LAYOUT_EXTRACT_SCRIPT_PATH} (${fs.existsSync(PDF_LAYOUT_EXTRACT_SCRIPT_PATH) ? 'OK' : 'MISSING'})`);
   console.log(`  PDF→DOCX mode: ${PDF2DOCX_LAYOUT_MODE}`);
   console.log(`  PDF→HWP primary pipeline: ${PDF_HWP_PRIMARY_PIPELINE}`);
   console.log(`  qpdf: ${QPDF_PATH} (${commandAvailable(QPDF_PATH) ? 'OK' : 'MISSING'})`);

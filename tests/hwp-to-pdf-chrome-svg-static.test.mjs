@@ -12,6 +12,8 @@ assert.match(server, /@page\{size:\$\{width\}px \$\{height\}px;margin:0\}/, 'pri
 assert.match(server, /svg\{display:block;width:\$\{width\}px!important;height:\$\{height\}px!important\}/, 'inline SVG must be forced to the original page box');
 assert.match(server, /--print-to-pdf-no-header/, 'Chrome SVG renderer must suppress header/footer');
 assert.match(server, /await renderSvgPageToPdfWithChrome\(renderableSvgPath, pagePdfPath, svgAssetDir\)/, 'rhwp SVG path must render the sanitized inline SVG so externalized images and text stay visible');
+assert.match(server, /SVG_TO_SEARCHABLE_PDF_SCRIPT_PATH/, 'server must configure searchable SVG→PDF script path');
+assert.match(server, /Trying searchable SVG→PDF via PyMuPDF/, 'rhwp SVG path must try searchable reconstruction before Chrome print-to-pdf');
 assert.match(server, /countSvgTextElements/, 'rhwp SVG path must know when source SVG contains text');
 assert.match(server, /countPdfExtractableTextChars/, 'rhwp SVG path must validate that output PDF still has extractable text');
 assert.match(server, /이미지-only PDF/, 'image-only rhwp fallback PDFs must be rejected instead of reported as successful conversions');

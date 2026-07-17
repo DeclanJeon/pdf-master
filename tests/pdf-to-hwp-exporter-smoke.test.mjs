@@ -32,7 +32,8 @@ const bytes = fs.readFileSync(outputPath);
 assert.deepEqual([...bytes.subarray(0, 8)], [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1], 'exporter must create HWP5/OLE, not HWPX/ZIP');
 
 const info = execFileSync('rhwp', ['info', outputPath], { encoding: 'utf8' });
-assert.match(info, /버전:\s*5\.0\.6\.1/, 'HWP header version should be populated');
+assert.match(info, /버전:\s*5\.0\.1\.1/, 'HWP header version should be populated');
+assert.match(info, /압축:\s*예/, 'HWP should be serialized compressed for Hancom-style consumers');
 assert.match(info, /구역0 용지:\s*(?!0×0)/, 'section page size should be populated');
 assert.match(info, /폰트\(한글\): \[0\]함초롬바탕/, 'default Korean font should be registered');
 assert.match(info, /ParaShape:\s*1/, 'default paragraph shape should be registered');
@@ -331,7 +332,7 @@ assert.match(dumpProbe, /vert=용지\([^0]|horz=용지\([^0]/, 'structured table
 fs.mkdirSync(tableLayoutSvgDir);
 execFileSync('rhwp', ['export-svg', tableLayoutOutputPath, '-o', tableLayoutSvgDir], { stdio: 'inherit' });
 const tableSvg = fs.readFileSync(path.join(tableLayoutSvgDir, 'out.svg'), 'utf8');
-assert.match(tableSvg, /font-family=\"Courier,/, 'table-only cell font family should be registered and used by native table text');
+assert.match(tableSvg, /font-family=\"(Courier|Liberation Mono|Nimbus Mono PS),/, 'table-only cell font family should be registered and used by native table text');
 assert.match(tableSvg, /font-size=\"11\"/, 'table cell text should preserve source font size instead of expanding to cell height');
 
 console.log('pdf-to-hwp exporter structured table smoke passed');

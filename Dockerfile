@@ -19,20 +19,22 @@ RUN apt-get update && \
     libssl-dev \
     fonts-noto-cjk \
     fonts-nanum \
+    fonts-liberation \
+    fonts-urw-base35 \
     locales \
     qpdf \
     ghostscript \
     imagemagick \
     && sed -i '/ko_KR.UTF-8/s/^# //g' /etc/locale.gen && \
     locale-gen ko_KR.UTF-8 && \
-    python3 -m pip install --break-system-packages --no-cache-dir 'pdf2docx>=0.5.13' && \
+    python3 -m pip install --break-system-packages --no-cache-dir 'pdf2docx>=0.5.13' 'pymupdf>=1.24.0' && \
     rm -rf /var/lib/apt/lists/*
 
 # Build/install rhwp CLI and HWP ingest exporter for PDF→HWP conversion.
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal && \
     cargo install --git https://github.com/DeclanJeon/rhwp --bin rhwp --locked
-RUN command -v rhwp && command -v pdftotext && command -v qpdf && command -v gs && python3 -c "import PIL, pdf2docx"
+RUN command -v rhwp && command -v pdftotext && command -v qpdf && command -v gs && python3 -c "import PIL, pdf2docx, fitz"
 
 # Install HWP filter extension for LibreOffice (Ubuntu deb on Debian)
 COPY libreoffice-h2orestart_0.6.1-1_all.deb /tmp/h2orestart.deb
@@ -80,8 +82,10 @@ ENV RHWP_INGEST_EXPORTER_PATH=rhwp-ingest-exporter
 ENV PDFTOTEXT_PATH=pdftotext
 ENV PDFTOPPM_PATH=pdftoppm
 ENV PDF2DOCX_SCRIPT_PATH=/app/scripts/pdf_to_docx.py
-ENV PDF2DOCX_LAYOUT_MODE=absolute
-ENV PDF_HWP_PRIMARY_PIPELINE=pdf2docx-docx
+ENV PDF_LAYOUT_EXTRACT_SCRIPT_PATH=/app/scripts/pdf_layout_extract.py
+ENV SVG_TO_SEARCHABLE_PDF_SCRIPT_PATH=/app/scripts/svg_to_searchable_pdf.py
+ENV PDF2DOCX_LAYOUT_MODE=faithful
+ENV PDF_HWP_PRIMARY_PIPELINE=pymupdf-native
 ENV QPDF_PATH=qpdf
 ENV GHOSTSCRIPT_PATH=gs
 

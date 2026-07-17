@@ -23,10 +23,14 @@ assert.match(server, /PDFTOTEXT_PATH/, 'server must configure pdftotext for word
 assert.match(server, /PDFTOHTML_PATH/, 'server must configure pdftohtml for editable coordinate layout extraction');
 assert.match(server, /PDFTOPPM_PATH/, 'server must configure pdftoppm for original PDF page background preservation');
 assert.match(server, /PDF2DOCX_SCRIPT_PATH/, 'server must configure the pdf2docx conversion script');
+assert.match(server, /PDF_LAYOUT_EXTRACT_SCRIPT_PATH/, 'server must configure the direct PDF layout extractor script');
 assert.match(server, /PDF_HWP_PRIMARY_PIPELINE/, 'server must configure the PDF→HWP primary pipeline');
-assert.match(server, /pdf2docx-docx/, 'PDF→HWP default should use the A안 pdf2docx→DOCX pipeline first');
-assert.match(server, /convertPdfToDocxWithPdf2docx/, 'PDF→HWP should call pdf2docx before HWP serialization');
+assert.match(server, /pymupdf-native/, 'PDF→HWP default should use the direct PyMuPDF absolute layout pipeline first');
+assert.match(server, /pdf2docx-docx/, 'PDF→HWP should keep the pdf2docx→DOCX pipeline as a fallback');
+assert.match(server, /createRhwpIngestFromPyMuPdfLayout/, 'PDF→HWP should call the direct PyMuPDF layout extractor before HWP serialization');
+assert.match(server, /convertPdfToDocxWithPdf2docx/, 'PDF→HWP should still call pdf2docx as a secondary path');
 assert.doesNotMatch(server, /--infilter=writer_pdf_import/, 'PDF→HWP default must not use LibreOffice PDF→ODT import as the primary path');
+assert.match(server, /const PDF_HWP_PRIMARY_PIPELINE = process\.env\.PDF_HWP_PRIMARY_PIPELINE \|\| 'pymupdf-native';/, 'PDF→HWP must default to pymupdf-native for coordinate fidelity');
 assert.match(server, /PDF_TEXT_ERASE_SCRIPT_PATH/, 'server may configure the optional text-erasing background cleanup script');
 assert.match(server, /python3-pil\(Pillow\)/, 'server must require Pillow for local-color background cleanup');
 assert.match(server, /\/api\/convert\/pdf-to-hwp/, 'server must expose pdf-to-hwp endpoint');
@@ -52,7 +56,7 @@ assert.match(server, /applyPdfWordBboxLayout\(ingest, bboxLayoutXml\)/, 'PDF→H
 assert.match(server, /extractPdfVectorBoxes/, 'PDF→HWP should recover filled PDF vector rectangles dropped by DOCX/ODT conversion');
 assert.match(server, /mergePdfVectorBoxes\(ingest, await extractPdfVectorBoxes\(inputPath\)\)/, 'PDF→HWP should merge recovered PDF vector boxes before HWP export');
 assert.match(server, /bestIndex[\s\S]*?duplicateDistanceThreshold[\s\S]*?bestDistance <= duplicateDistanceThreshold[\s\S]*?page\.lines\.splice\(bestIndex, 1\)/, 'PDF→HWP should replace only a nearby matching misplaced ODT label, not a distant repeated label on the page');
-assert.match(server, /if \(!commandAvailable\(PYTHON_PATH, \['-c', 'import fitz'\]\)\) missing\.push\('python3-pymupdf\(PyMuPDF\)'\);\n  if \(PDF_HWP_PRIMARY_PIPELINE === 'pdf2docx-docx'\)/, 'PDF→HWP should require PyMuPDF for unconditional vector recovery regardless of primary pipeline');
+assert.match(server, /if \(!commandAvailable\(PYTHON_PATH, \['-c', 'import fitz'\]\)\) missing\.push\('python3-pymupdf\(PyMuPDF\)'\);\n  if \(!fs\.existsSync\(PDF_LAYOUT_EXTRACT_SCRIPT_PATH\)\) missing\.push\('pdf_layout_extract\.py'\);/, 'PDF→HWP should require PyMuPDF and the direct layout extractor regardless of primary pipeline');
 assert.match(server, /import fitz/, 'PDF→HWP should explicitly check PyMuPDF availability for vector recovery');
 assert.match(server, /pythonPyMuPDF/, 'PDF→HWP health should expose PyMuPDF availability');
 assert.match(exporter, /ordinary HWP body[\s\S]*paragraphs/, 'PDF→HWP clean mode should emit directly editable body paragraphs, not image-only output');

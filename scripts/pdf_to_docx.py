@@ -16,7 +16,7 @@ except ImportError:
 
 try:
     from docx import Document
-    from docx.shared import Pt, Mm
+    from docx.shared import Pt, Mm, RGBColor
     from docx.enum.section import WD_SECTION
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.enum.table import WD_TABLE_ALIGNMENT
@@ -30,7 +30,7 @@ log = logging.getLogger(__name__)
 
 PT_TO_MM = 25.4 / 72
 MM_TO_PT = 72 / 25.4
-DEFAULT_MARGIN_MM = 10
+DEFAULT_MARGIN_MM = 2
 ANCHOR_PARA_HEIGHT = 4  # anchor용 빈 문단이 차지하는 대략적 높이(pt)
 
 
@@ -47,6 +47,23 @@ def _normalize_font(raw_font: str) -> str:
         base = raw_font.split("+", 1)[1]
         return _normalize_font(base)
     return raw_font
+
+
+def _color_to_hex(color) -> str | None:
+    """Normalize PyMuPDF span/drawing colors to #RRGGBB."""
+    if color is None:
+        return None
+    if isinstance(color, int):
+        return f"#{color & 0xFFFFFF:06X}"
+    try:
+        if len(color) >= 3:
+            r, g, b = color[:3]
+            if all(isinstance(c, float) or (isinstance(c, int) and c <= 1) for c in (r, g, b)):
+                return f"#{round(max(0, min(1, float(r))) * 255):02X}{round(max(0, min(1, float(g))) * 255):02X}{round(max(0, min(1, float(b))) * 255):02X}"
+            return f"#{int(r) & 255:02X}{int(g) & 255:02X}{int(b) & 255:02X}"
+    except Exception:
+        return None
+    return None
 
 
 def _extract_cell_lines(page, clip_rect):
@@ -162,12 +179,24 @@ def analyze_page(page, mode: str) -> dict:
                 r = fitz.Rect(span["bbox"])
                 if any(tr.contains(r) or tr.intersects(r) for tr in table_rects): continue
                 font = _normalize_font(span["font"])
+                # Absolute layout always uses explicit x indent (left). Flow modes
+                # may still guess center/right from origin position.
                 align = "left"
-                if 0.35 < span["origin"][0]/pw < 0.65: align = "center"
-                elif span["origin"][0]/pw > 0.7: align = "right"
-                text_elements.append({"text": text, "x": span["origin"][0], "y": span["origin"][1],
-                    "size": span["size"], "font": font, "align": align,
-                    "bold": "bold" in span["font"].lower()})
+                if mode != "absolute":
+                    if 0.35 < span["origin"][0] / pw < 0.65:
+                        align = "center"
+                    elif span["origin"][0] / pw > 0.7:
+                        align = "right"
+                text_elements.append({
+                    "text": text,
+                    "x": span["origin"][0],
+                    "y": span["origin"][1],
+                    "size": span["size"],
+                    "font": font,
+                    "align": align,
+                    "bold": "bold" in span["font"].lower() or bool(span.get("flags", 0) & 16),
+                    "color": _color_to_hex(span.get("color")),
+                })
 
     # 모든 이미지 — 텍스트/표와 겹치는 것만 behindDoc 대상
     image_elements = []
@@ -188,14 +217,146 @@ def analyze_page(page, mode: str) -> dict:
         needs_behind = in_table or overlaps_text
         image_elements.append({"xref": xref, "bbox": info["bbox"], "w_pt": w_pt, "h_pt": h_pt,
             "data": img_data["image"], "ext": img_data.get("ext","png"), "needs_behind": needs_behind})
+    # 채움 사각형 등 벡터 도형 → 비트맵 앵커로 보존 (pdf2docx/절대 레이아웃 모두에서 색 박스 유실 방지)
+    shape_elements = []
+    try:
+        drawings = page.get_drawings()
+    except Exception:
+        drawings = []
+    for di, drawing in enumerate(drawings):
+        fill = drawing.get("fill")
+        rect = drawing.get("rect")
+        if not fill or rect is None:
+            continue
+        try:
+            x0, y0, x1, y1 = float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1)
+        except Exception:
+            continue
+        w_pt = x1 - x0
+        h_pt = y1 - y0
+        if w_pt < 2 or h_pt < 2:
+            continue
+        # 페이지 전체 흰 배경 같은 큰 사각형은 제외
+        if w_pt > pw * 0.95 and h_pt > ph * 0.95:
+            continue
+        fill_hex = _color_to_hex(fill)
+        if not fill_hex or fill_hex.upper() in {"#FFFFFF", "#FFFFFE"}:
+            continue
+        # 네이티브 DrawingML 사각형 메타 (PNG 래스터 없이 색/위치 보존)
+        try:
+            stroke = drawing.get("color") or drawing.get("stroke")
+            stroke_hex = _color_to_hex(stroke)
+            if stroke_hex and stroke_hex.upper() == fill_hex.upper():
+                stroke_hex = None
+            shape_elements.append({
+                "bbox": (x0, y0, x1, y1),
+                "w_pt": w_pt,
+                "h_pt": h_pt,
+                "needs_behind": True,
+                "kind": "vector-fill",
+                "fill": fill_hex,
+                "stroke": stroke_hex,
+                "stroke_width": float(drawing.get("width") or 0.75),
+            })
+        except Exception as exc:
+            log.debug("shape vector meta skip %s: %s", di, exc)
+
+    # 이미지가 없는 경우에도 도형 이미지는 포함
+    image_elements = shape_elements + image_elements
+
 
     return {"width": pw, "height": ph,
-        "tables": table_elements, "texts": text_elements, "images": image_elements}
+        "tables": table_elements, "texts": text_elements, "images": image_elements,
+        "shapes": shape_elements}
+
+
+def _hex_to_srgb(hex_color: str) -> str:
+    """#RRGGBB → DrawingML srgbClr val (RRGGBB)."""
+    value = (hex_color or "").strip().lstrip("#")
+    if len(value) != 6:
+        return "000000"
+    return value.upper()
+
+
+def _add_anchored_vector_shape_to_para(para, shape_el, doc_pr_counter):
+    """문단에 DrawingML 사각형(채움/선) 앵커를 직접 추가.
+
+    PNG 래스터 대신 네이티브 도형을 써서 Word에서 색 박스 편집이 가능하고
+    해상도 손실이 없다.
+    """
+    fill_hex = shape_el.get("fill") or "#000000"
+    stroke_hex = shape_el.get("stroke")
+    x_emu = int(shape_el["bbox"][0] * 12700)
+    y_emu = int(shape_el["bbox"][1] * 12700)
+    w_emu = max(1, int(shape_el["w_pt"] * 12700))
+    h_emu = max(1, int(shape_el["h_pt"] * 12700))
+    counter = doc_pr_counter[0]
+    doc_pr_counter[0] += 1
+    behind = "1" if shape_el.get("needs_behind", True) else "0"
+    rh = "0" if behind == "1" else str(counter)
+    fill_val = _hex_to_srgb(fill_hex)
+    stroke_xml = "<a:ln><a:noFill/></a:ln>"
+    if stroke_hex:
+        stroke_val = _hex_to_srgb(stroke_hex)
+        if stroke_val != fill_val:
+            stroke_w = max(9525, int(float(shape_el.get("stroke_width") or 0.75) * 12700))
+            stroke_xml = (
+                f'<a:ln w="{stroke_w}">'
+                f'<a:solidFill><a:srgbClr val="{stroke_val}"/></a:solidFill>'
+                f"</a:ln>"
+            )
+
+    # wps namespace for WordprocessingShape (DrawingML shape in Word).
+    # python-docx nsmap does not register "wps", so declare URIs explicitly.
+    drawing_xml = (
+        '<w:drawing '
+        'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
+        'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" '
+        'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">'
+        f'<wp:anchor distT="0" distB="0" distL="0" distR="0" '
+        f'simplePos="0" relativeHeight="{rh}" behindDoc="{behind}" '
+        f'locked="0" layoutInCell="1" allowOverlap="1">'
+        f'<wp:simplePos x="0" y="0"/>'
+        f'<wp:positionH relativeFrom="page"><wp:posOffset>{x_emu}</wp:posOffset></wp:positionH>'
+        f'<wp:positionV relativeFrom="page"><wp:posOffset>{y_emu}</wp:posOffset></wp:positionV>'
+        f'<wp:extent cx="{w_emu}" cy="{h_emu}"/>'
+        f'<wp:effectExtent l="0" t="0" r="0" b="0"/>'
+        f"<wp:wrapNone/>"
+        f'<wp:docPr id="{counter}" name="Shape {counter}"/>'
+        f"<wp:cNvGraphicFramePr/>"
+        f"<a:graphic>"
+        f'<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">'
+        f"<wps:wsp>"
+        f"<wps:cNvCnPr/>"
+        f"<wps:cNvSpPr/>"
+        f"<wps:spPr>"
+        f'<a:xfrm><a:off x="0" y="0"/><a:ext cx="{w_emu}" cy="{h_emu}"/></a:xfrm>'
+        f'<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>'
+        f'<a:solidFill><a:srgbClr val="{fill_val}"/></a:solidFill>'
+        f"{stroke_xml}"
+        f"</wps:spPr>"
+        f"<wps:bodyPr/>"
+        f"</wps:wsp>"
+        f"</a:graphicData>"
+        f"</a:graphic>"
+        f"</wp:anchor>"
+        f"</w:drawing>"
+    )
+    run = para.add_run()
+    run._element.append(parse_xml(drawing_xml))
 
 
 def _add_anchored_image_to_para(doc, para, img_el, doc_pr_counter):
     """문단에 inline 이미지를 추가한 후 anchor로 변환.
-    텍스트/표와 겹치는 이미지만 behindDoc=1, 나머지는 전경(behindDoc=0)."""
+    텍스트/표와 겹치는 이미지만 behindDoc=1, 나머지는 전경(behindDoc=0).
+    vector-fill 메타는 DrawingML 사각형으로 라우팅한다."""
+    if img_el.get("kind") == "vector-fill" or not img_el.get("data"):
+        if img_el.get("kind") == "vector-fill" or img_el.get("fill"):
+            _add_anchored_vector_shape_to_para(para, img_el, doc_pr_counter)
+        return
+
     behind = "1" if img_el.get("needs_behind") else "0"
     x_emu = int(img_el["bbox"][0] * 12700)
     y_emu = int(img_el["bbox"][1] * 12700)
@@ -245,9 +406,11 @@ def _add_anchored_image_to_para(doc, para, img_el, doc_pr_counter):
     drawing.replace(inline, anchor_el)
 
 
-def _configure_section(section, page_data: dict):
+def _configure_section(section, page_data: dict, mode: str = "editable"):
     pw_pt = page_data["width"]; ph_pt = page_data["height"]
-    margin_mm = DEFAULT_MARGIN_MM
+    # Absolute layout maps PDF page points directly; zero margins avoid a
+    # horizontal/vertical shift relative to origin.
+    margin_mm = 0.0 if mode == "absolute" else DEFAULT_MARGIN_MM
     section.page_width = Mm(pw_pt * PT_TO_MM)
     section.page_height = Mm(ph_pt * PT_TO_MM)
     section.top_margin = Mm(margin_mm)
@@ -256,11 +419,48 @@ def _configure_section(section, page_data: dict):
     section.right_margin = Mm(margin_mm)
 
 
+
+def _place_text_paragraph(doc: Document, tel: dict, cursor_y: float, page_data: dict, layout_mode: str, margin_pt: float):
+    """Place one text line. Absolute mode sets left indent from PDF x."""
+    txt_y = tel["y"]
+    gap = max(0, txt_y - cursor_y)
+    p = doc.add_paragraph()
+    if gap > 1:
+        p.paragraph_format.space_before = Pt(gap)
+    run = p.add_run(tel["text"])
+    _apply_font(run, tel)
+    if layout_mode == "absolute":
+        # Horizontal fidelity: indent from page left edge (margin is 0).
+        x_pt = max(0.0, float(tel.get("x") or 0.0) - margin_pt)
+        p.paragraph_format.left_indent = Pt(x_pt)
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    else:
+        if tel.get("align") == "center":
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        elif tel.get("align") == "right":
+            p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p.paragraph_format.space_after = Pt(0)
+    p.paragraph_format.line_spacing = Pt(tel["size"] * 1.15)
+    if any(
+        img_el.get("needs_behind")
+        and fitz.Rect(img_el["bbox"]).intersects(
+            fitz.Rect(tel["x"] - 2, tel["y"] - 2, tel["x"] + 200, tel["y"] + tel["size"])
+        )
+        for img_el in page_data["images"]
+    ):
+        shd = parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:color="auto" w:fill="FFFFFF"/>')
+        p._element.get_or_add_pPr().append(shd)
+    return txt_y + tel["size"]
+
+
 def _append_page(doc: Document, page_data: dict, mode: str, is_first_page: bool, doc_pr_counter: list):
     section = doc.sections[0] if is_first_page else doc.add_section(WD_SECTION.NEW_PAGE)
-    _configure_section(section, page_data)
+    # create_layout_docx maps absolute→editable for output_mode; recover intent
+    # from page_data flag when present.
+    layout_mode = page_data.get("layout_mode") or mode
+    _configure_section(section, page_data, layout_mode)
 
-    margin_pt = DEFAULT_MARGIN_MM * MM_TO_PT
+    margin_pt = 0.0 if layout_mode == "absolute" else DEFAULT_MARGIN_MM * MM_TO_PT
 
     table_top = page_data["tables"][0]["bbox"][1] if page_data["tables"] else page_data["height"]
 
@@ -279,24 +479,7 @@ def _append_page(doc: Document, page_data: dict, mode: str, is_first_page: bool,
 
     cursor_y = margin_pt + ANCHOR_PARA_HEIGHT
     for tel in pre_texts:
-        txt_y = tel["y"]
-        gap = max(0, txt_y - cursor_y)
-        p = doc.add_paragraph()
-        if gap > 1: p.paragraph_format.space_before = Pt(gap)
-        run = p.add_run(tel["text"])
-        _apply_font(run, tel)
-        if tel.get("align") == "center": p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        elif tel.get("align") == "right": p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        p.paragraph_format.space_after = Pt(0)
-        p.paragraph_format.line_spacing = Pt(tel["size"] * 1.15)
-        # behindDoc 이미지와 겹치는 텍스트만 흰색 배경
-        if any(img_el.get("needs_behind") and 
-               fitz.Rect(img_el["bbox"]).intersects(
-                   fitz.Rect(tel["x"]-2, tel["y"]-2, tel["x"]+200, tel["y"]+tel["size"]))
-               for img_el in page_data["images"]):
-            shd = parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:color="auto" w:fill="FFFFFF"/>')
-            p._element.get_or_add_pPr().append(shd)
-        cursor_y = txt_y + tel["size"]
+        cursor_y = _place_text_paragraph(doc, tel, cursor_y, page_data, layout_mode, margin_pt)
 
     # ── 3. 표 ──
     for tinfo in page_data["tables"]:
@@ -307,7 +490,27 @@ def _append_page(doc: Document, page_data: dict, mode: str, is_first_page: bool,
             spacer.paragraph_format.space_before = Pt(gap)
             spacer.paragraph_format.space_after = Pt(0)
             spacer.paragraph_format.line_spacing = Pt(0.1)
-        _add_table(doc, tinfo)
+        table = _add_table(doc, tinfo)
+        if layout_mode == "absolute" and table is not None:
+            # Keep table left edge at PDF bbox x (page margin is 0).
+            try:
+                tab_x = max(0.0, float(tinfo["bbox"][0]) - margin_pt)
+                table.alignment = WD_TABLE_ALIGNMENT.LEFT
+                # Table left indent via tblInd
+                tbl = table._tbl
+                tblPr = tbl.tblPr
+                if tblPr is None:
+                    tblPr = parse_xml(f'<w:tblPr {nsdecls("w")}/>')
+                    tbl.insert(0, tblPr)
+                existing = tblPr.find(qn('w:tblInd'))
+                if existing is not None:
+                    tblPr.remove(existing)
+                # twips: 1pt = 20 twips
+                tblPr.append(parse_xml(
+                    f'<w:tblInd {nsdecls("w")} w:w="{int(tab_x * 20)}" w:type="dxa"/>'
+                ))
+            except Exception:
+                pass
         cursor_y = tinfo["bbox"][3]
 
     # ── 4. 표 아래 텍스트 ──
@@ -315,24 +518,7 @@ def _append_page(doc: Document, page_data: dict, mode: str, is_first_page: bool,
     post_texts.sort(key=lambda t: t["y"])
 
     for tel in post_texts:
-        txt_y = tel["y"]
-        gap = max(0, txt_y - cursor_y)
-        p = doc.add_paragraph()
-        if gap > 1: p.paragraph_format.space_before = Pt(gap)
-        run = p.add_run(tel["text"])
-        _apply_font(run, tel)
-        if tel.get("align") == "center": p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        elif tel.get("align") == "right": p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-        p.paragraph_format.space_after = Pt(0)
-        p.paragraph_format.line_spacing = Pt(tel["size"] * 1.15)
-        # behindDoc 이미지와 겹치는 텍스트만 흰색 배경
-        if any(img_el.get("needs_behind") and 
-               fitz.Rect(img_el["bbox"]).intersects(
-                   fitz.Rect(tel["x"]-2, tel["y"]-2, tel["x"]+200, tel["y"]+tel["size"]))
-               for img_el in page_data["images"]):
-            shd = parse_xml(f'<w:shd {nsdecls("w")} w:val="clear" w:color="auto" w:fill="FFFFFF"/>')
-            p._element.get_or_add_pPr().append(shd)
-        cursor_y = txt_y + tel["size"]
+        cursor_y = _place_text_paragraph(doc, tel, cursor_y, page_data, layout_mode, margin_pt)
 
 
 def build_docx(page_data: dict, mode: str) -> bytes:
@@ -346,7 +532,8 @@ def build_docx(page_data: dict, mode: str) -> bytes:
 def create_absolute_layout_docx(pdf_doc, page_index: int = 0) -> bytes:
     page = pdf_doc[page_index]
     page_data = analyze_page(page, "absolute")
-    return build_docx(page_data, "editable")
+    page_data["layout_mode"] = "absolute"
+    return build_docx(page_data, "absolute")
 
 
 def create_layout_docx(pdf_doc, mode: str, start: int, end: int) -> bytes:
@@ -362,8 +549,11 @@ def create_layout_docx(pdf_doc, mode: str, start: int, end: int) -> bytes:
     doc_pr_counter = [1]
     for page_index in range(first, last + 1):
         page_mode = "absolute" if mode == "absolute" else mode
-        output_mode = "editable" if mode == "absolute" else mode
+        # Keep absolute through placement so horizontal indents apply. Other
+        # modes still use their flow builders.
+        output_mode = page_mode
         page_data = analyze_page(pdf_doc[page_index], page_mode)
+        page_data["layout_mode"] = page_mode
         _append_page(doc, page_data, output_mode, page_index == first, doc_pr_counter)
 
     buf = io.BytesIO(); doc.save(buf)
@@ -378,12 +568,71 @@ def create_faithful_docx_with_pdf2docx(input_path: str, output_path: str, start:
             start=start,
             end=None if end < 0 else end,
             page_margin_factor_top=0.0,
+            page_margin_factor_bottom=0.0,
             float_image_ignorable_gap=0.0,
-            clip_image_res_ratio=6.0,
+            clip_image_res_ratio=8.0,
             extract_stream_table=True,
+            shape_min_dimension=0.5,
+            min_svg_w=0.5,
+            min_svg_h=0.5,
+            connected_border_tolerance=1.0,
+            min_border_clearance=0.5,
+            line_overlap_threshold=0.95,
+            parse_lattice_table=True,
+            parse_stream_table=True,
         )
     finally:
         cv.close()
+    _inject_vector_fill_shapes_into_docx(input_path, output_path, start, end)
+
+def _inject_vector_fill_shapes_into_docx(pdf_path: str, docx_path: str, start: int = 0, end: int = -1):
+    """pdf2docx DOCX에 누락된 채움 사각형을 DrawingML 앵커 도형으로 보강."""
+    try:
+        pdf_doc = fitz.open(pdf_path)
+    except Exception as exc:
+        log.warning("vector fill inject: PDF open failed: %s", exc)
+        return
+
+    page_count = len(pdf_doc)
+    first = max(0, start)
+    last = page_count - 1 if end < 0 else min(end, page_count - 1)
+    if first > last:
+        pdf_doc.close()
+        return
+
+    page = pdf_doc[first]
+    page_data = analyze_page(page, "absolute")
+    shapes = page_data.get("shapes") or [
+        img for img in page_data.get("images", [])
+        if img.get("kind") == "vector-fill" or img.get("fill")
+    ]
+    pdf_doc.close()
+    if not shapes:
+        return
+
+    try:
+        doc = Document(docx_path)
+    except Exception as exc:
+        log.warning("vector fill inject: DOCX open failed: %s", exc)
+        return
+
+    body = doc.element.body
+    para = doc.add_paragraph()
+    para.paragraph_format.space_before = Pt(0)
+    para.paragraph_format.space_after = Pt(0)
+    para.paragraph_format.line_spacing = Pt(0.1)
+    # move newly added paragraph to the top of the body
+    body.insert(0, para._element)
+
+    counter = [1000]
+    for shape in shapes:
+        try:
+            _add_anchored_vector_shape_to_para(para, shape, counter)
+        except Exception as exc:
+            log.debug("vector fill inject skip: %s", exc)
+
+    doc.save(docx_path)
+    log.info("vector fill DrawingML shapes injected: %d", len(shapes))
 
 
 def _add_table(doc: Document, tinfo: dict):
@@ -444,10 +693,19 @@ def _add_table(doc: Document, tinfo: dict):
             _set_cell_margins(doc_cell, top=10, bottom=10, start=30, end=30)
 
 
+    return table
+
+
 def _apply_font(run, fi: dict):
     sz = fi.get("size", 11); fn = fi.get("font", "Malgun Gothic")
     run.font.size = Pt(sz); run.font.name = fn
     if fi.get("bold"): run.bold = True
+    color = fi.get("color")
+    if isinstance(color, str) and color.startswith("#") and len(color) == 7:
+        try:
+            run.font.color.rgb = RGBColor(int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16))
+        except Exception:
+            pass
     rPr = run._element.get_or_add_rPr()
     rFonts = rPr.find(qn('w:rFonts'))
     if rFonts is None:

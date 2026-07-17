@@ -4,7 +4,7 @@ use std::path::Path;
 
 use rhwp::model::bin_data::{BinData, BinDataCompression, BinDataContent, BinDataStatus, BinDataType};
 use rhwp::model::control::Control;
-use rhwp::model::document::{DocProperties, Document, FileHeader, HwpVersion, Section};
+use rhwp::model::document::{DocProperties, Document, FileHeader, HwpVersion, Preview, Section};
 use rhwp::model::image::{CropInfo, ImageAttr, ImageEffect, Picture};
 use rhwp::model::page::{PageBorderFill, PageDef};
 use rhwp::model::paragraph::{CharShapeRef, LineSeg, Paragraph};
@@ -18,8 +18,18 @@ use rhwp::model::style::{
     ImageFillMode, ParaShape, ShapeBorderLine, SolidFill, Style, TabDef,
 };
 use rhwp::model::Padding;
-use rhwp::parser::ingest::schema::{IngestDocument, Media};
+use rhwp::parser::ingest::schema::{IngestDocument, Media, StemBlock};
 use serde::Deserialize;
+use serde::Deserializer;
+
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 
 fn usage() {
     eprintln!("Usage: rhwp-ingest-exporter <ingest.json> [--media-dir <dir>] -o <output.hwp|output.hwpx> [--format hwp|hwpx]");
@@ -27,6 +37,100 @@ fn usage() {
 
 fn mm_to_hwpunit(mm: f32) -> u32 {
     ((mm as f64 / 25.4) * 7200.0).round() as u32
+}
+
+fn default_hwp_header() -> FileHeader {
+    FileHeader {
+        version: HwpVersion {
+            major: 5,
+            minor: 0,
+            build: 1,
+            revision: 1,
+        },
+        // Bit 0 = compressed (matches common Hancom-authored HWP5 files).
+        flags: 0x1,
+        compressed: true,
+        encrypted: false,
+        distribution: false,
+        raw_data: None,
+    }
+}
+
+fn default_compat_extra_streams() -> Vec<(String, Vec<u8>)> {
+    // Minimal scripts streams observed in real Hancom HWP5 files. These are
+    // not required for rhwp rendering, but some consumers reject sparse CFBs.
+    vec![
+        (
+            "/Scripts/DefaultJScript".to_string(),
+            vec![
+                0x63, 0x60, 0x40, 0x05, 0xff, 0x81, 0x00, 0x00, 0x6e, 0xbb, 0x6e, 0xd1, 0x14, 0x00,
+                0x00, 0x00,
+            ],
+        ),
+        (
+            "/Scripts/JScriptVersion".to_string(),
+            vec![0x63, 0x64, 0x80, 0x00, 0x00, 0xf7, 0xdf, 0x88, 0xa9, 0x08, 0x00, 0x00, 0x00],
+        ),
+        ("/DocOptions/_LinkDoc".to_string(), vec![0u8; 524]),
+    ]
+}
+
+fn apply_hancom_compat(doc: &mut Document, ingest: &IngestDocument) {
+    doc.header = default_hwp_header();
+
+    let mut preview_text = String::new();
+    for question in &ingest.questions {
+        if !question.stem.trim().is_empty() {
+            if !preview_text.is_empty() {
+                preview_text.push('\n');
+            }
+            preview_text.push_str(question.stem.trim());
+        }
+        for block in &question.stem_blocks {
+            if let StemBlock::Text { text } = block {
+                if !text.trim().is_empty() {
+                    if !preview_text.is_empty() {
+                        preview_text.push('\n');
+                    }
+                    preview_text.push_str(text.trim());
+                }
+            }
+        }
+    }
+    // Prefer document body text when exam-style stem fields are empty
+    // (PDF layout path does not populate questions).
+    if preview_text.is_empty() {
+        for section in &doc.sections {
+            for para in &section.paragraphs {
+                let t = para.text.trim();
+                if !t.is_empty() {
+                    if !preview_text.is_empty() {
+                        preview_text.push('\n');
+                    }
+                    preview_text.push_str(t);
+                }
+                if preview_text.chars().count() >= 200 {
+                    break;
+                }
+            }
+            if preview_text.chars().count() >= 200 {
+                break;
+            }
+        }
+    }
+    if preview_text.is_empty() {
+        preview_text = "PDF Master".to_string();
+    }
+    // Keep preview short (UTF-16 storage grows quickly).
+    let short: String = preview_text.chars().take(200).collect();
+    doc.preview = Some(Preview {
+        image: None,
+        text: Some(short),
+    });
+
+    if doc.extra_streams.is_empty() {
+        doc.extra_streams = default_compat_extra_streams();
+    }
 }
 
 fn default_font_faces(default_font: &str) -> Vec<Vec<Font>> {
@@ -82,13 +186,13 @@ struct PdfLayoutPage {
     height: f32,
     #[serde(default)]
     background: Option<PdfLayoutBackground>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     images: Vec<PdfLayoutImage>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     lines: Vec<PdfLayoutLine>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     boxes: Vec<PdfLayoutBox>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     tables: Vec<PdfLayoutTable>,
 }
 
@@ -157,6 +261,12 @@ struct PdfLayoutLine {
     y: f32,
     width: f32,
     height: f32,
+    /// PDF text baseline (origin y), same unit as x/y.
+    #[serde(default)]
+    baseline: Option<f32>,
+    /// Measured natural text width in source units (optional; used for letter-spacing).
+    #[serde(default)]
+    natural_width: Option<f32>,
     #[serde(default)]
     font_family: Option<String>,
     #[serde(default)]
@@ -177,6 +287,9 @@ struct PdfLayoutBox {
     stroke: Option<String>,
     #[serde(default)]
     fill: Option<String>,
+    /// PDF stroke width in the same unit as page coordinates (usually points).
+    #[serde(default)]
+    stroke_width: Option<f32>,
 }
 
 fn parse_pdf_layout(input_bytes: &[u8]) -> Option<PdfLayout> {
@@ -255,11 +368,36 @@ fn normalize_font_name(font: &str, fallback: &str) -> String {
         .map(|(_, name)| name)
         .unwrap_or(trimmed)
         .replace('-', " ");
-    if without_subset.trim().is_empty() {
-        fallback.to_string()
-    } else {
-        without_subset
+    let name = without_subset.trim();
+    if name.is_empty() {
+        return fallback.to_string();
     }
+    let lower = name.to_ascii_lowercase();
+    // Map common PDF base fonts onto widely installed metric-compatible faces so
+    // glyph widths stay closer to the source PDF during rhwp/HWP rendering.
+    if lower.contains("helv") || lower == "helvetica" || lower.contains("nimbus sans") {
+        // URW Nimbus Sans is the metric-compatible Helvetica clone shipped as OTF.
+        return "Nimbus Sans".to_string();
+    }
+    if lower.contains("arial") {
+        return "Nimbus Sans".to_string();
+    }
+    if lower.contains("times") || lower.contains("nimbus roman") {
+        return "Nimbus Roman".to_string();
+    }
+    if lower.contains("courier") || lower.contains("nimbus mono") {
+        return "Nimbus Mono PS".to_string();
+    }
+    if lower.contains("liberation sans") {
+        return "Nimbus Sans".to_string();
+    }
+    if lower.contains("liberation serif") {
+        return "Nimbus Roman".to_string();
+    }
+    if lower.contains("liberation mono") {
+        return "Nimbus Mono PS".to_string();
+    }
+    name.to_string()
 }
 
 fn html_color_to_hwp_color(value: Option<&str>) -> u32 {
@@ -515,7 +653,15 @@ fn make_border_shape(
         },
         border_line: ShapeBorderLine {
             color: stroke,
-            width: if b.stroke.is_some() { 33 } else { 0 },
+            // 100 HWPUNIT ≈ 1 PDF point. Preserve source stroke thickness.
+            width: if b.stroke.is_some() {
+                b.stroke_width
+                    .map(|w| ((w.max(0.1) as f64) * 100.0).round() as i32)
+                    .unwrap_or(100)
+                    .clamp(20, 800)
+            } else {
+                0
+            },
             attr: if b.stroke.is_some() { 0xD1000041 } else { 0 },
             outline_style: 0,
         },
@@ -997,19 +1143,7 @@ fn normalize_document_for_hwp(doc: &mut Document, ingest: &IngestDocument, media
         .saturating_sub(margin_left)
         .saturating_sub(margin_right) as i32;
 
-    doc.header = FileHeader {
-        version: HwpVersion {
-            major: 5,
-            minor: 0,
-            build: 6,
-            revision: 1,
-        },
-        flags: 0,
-        compressed: false,
-        encrypted: false,
-        distribution: false,
-        raw_data: None,
-    };
+    doc.header = default_hwp_header();
 
     if doc.sections.is_empty() {
         doc.sections.push(Section::default());
@@ -1124,19 +1258,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
     let page_height = mm_to_hwpunit(ingest.page_size.height_mm);
     let mut doc = rhwp::document_core::builders::exam_paper::build_exam_paper(ingest);
 
-    doc.header = FileHeader {
-        version: HwpVersion {
-            major: 5,
-            minor: 0,
-            build: 6,
-            revision: 1,
-        },
-        flags: 0,
-        compressed: false,
-        encrypted: false,
-        distribution: false,
-        raw_data: None,
-    };
+    doc.header = default_hwp_header();
 
     doc.sections.clear();
     doc.doc_properties = DocProperties {
@@ -1214,7 +1336,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
     doc.doc_info.bin_data_list.clear();
 
     let mut char_shapes: Vec<CharShape> = Vec::new();
-    let mut char_shape_id_for = |font_name: &str, font_size: i32, bold: bool, color: u32, ratio: u8| -> u32 {
+    let mut char_shape_id_for = |font_name: &str, font_size: i32, bold: bool, color: u32, ratio: u8, spacing: i8| -> u32 {
         let font_id = font_names
             .iter()
             .position(|name| name == font_name)
@@ -1222,7 +1344,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
         let candidate = CharShape {
             font_ids: [font_id; 7],
             ratios: [ratio; 7],
-            spacings: [0; 7],
+            spacings: [spacing; 7],
             relative_sizes: [100; 7],
             char_offsets: [0; 7],
             base_size: font_size,
@@ -1399,7 +1521,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                             .unwrap_or(1000)
                             .clamp(600, 7200);
                         let color = html_color_to_hwp_color(src_cell.color.as_deref());
-                        let char_shape_id = char_shape_id_for(&font_name, font_size, src_cell.bold, color, 100);
+                        let char_shape_id = char_shape_id_for(&font_name, font_size, src_cell.bold, color, 100, 0);
                         let line_height = ((font_size * 135) / 100).clamp(600, (height as i32).max(600));
                         Cell {
                             col,
@@ -1500,7 +1622,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                 let color = html_color_to_hwp_color(line.color.as_deref());
                 let x = (line.x.max(0.0) * sx).round() as i32;
                 let y = (line.y.max(0.0) * sy).round() as i32;
-                let h = (line.height.max(1.0) * sy * 1.18).round().max(600.0) as i32;
+                let h = (line.height.max(1.0) * sy * 1.02).round().max(600.0) as i32;
                 let gap = y.saturating_sub(cursor_y);
                 if gap > 80 {
                     section.paragraphs.push(spacer_paragraph(gap, page_width as i32));
@@ -1518,7 +1640,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                     ..Default::default()
                 });
 
-                let char_shape_id = char_shape_id_for(&font_name, font_size, line.bold, color, 100);
+                let char_shape_id = char_shape_id_for(&font_name, font_size, line.bold, color, 100, 0);
                 let mut paragraph = text_paragraph(text, char_shape_id, h, (page_width as i32 - x.max(0)).max(200));
                 paragraph.para_shape_id = para_shape_id;
                 section.paragraphs.push(paragraph);
@@ -1526,8 +1648,16 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
             }
         } else {
             for line in &page.lines {
-                let text = line.text.trim();
+                // Glyph layout must keep pure spaces so word gaps match the PDF.
+                let text = if glyph_level_layout {
+                    line.text.clone()
+                } else {
+                    line.text.trim().to_string()
+                };
                 if text.is_empty() {
+                    continue;
+                }
+                if !glyph_level_layout && text.chars().all(|c| c.is_whitespace()) {
                     continue;
                 }
                 let line_key = text.split_whitespace().collect::<String>().to_lowercase();
@@ -1541,18 +1671,45 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                 let font_size = scaled_font.clamp(600, 7200);
                 let color = html_color_to_hwp_color(line.color.as_deref());
                 let x = (line.x.max(0.0) * sx).round() as u32;
-                let y = (line.y.max(0.0) * sy).round() as u32;
                 let target_w = (line.width.max(1.0) * sx).round().max(200.0) as u32;
                 let ratio = 100;
-                let char_shape_id = char_shape_id_for(&font_name, font_size, line.bold, color, ratio);
-                let w = if word_level_layout {
-                    (target_w as f32 * 1.02).round().max(200.0) as u32
-                } else if glyph_level_layout {
-                    (target_w as f32 * 1.45).round().max(200.0) as u32
+                // Fit letter-spacing to source width when natural width is known.
+                let spacing: i8 = if let (Some(natural), Some(_size)) = (line.natural_width, line.font_size) {
+                    if natural > 0.5 && line.width > 0.5 && line.text.chars().count() > 1 {
+                        let factor = (line.width / natural) - 1.0;
+                        (factor * 100.0).round().clamp(-50.0, 50.0) as i8
+                    } else {
+                        0
+                    }
                 } else {
-                    (line.width.max(1.0) * sx * 1.06).round().max(200.0) as u32
+                    0
                 };
-                let h = (line.height.max(1.0) * sy * if word_level_layout || glyph_level_layout { 1.35 } else { 1.20 }).round().max(600.0) as u32;
+                let char_shape_id = char_shape_id_for(&font_name, font_size, line.bold, color, ratio, spacing);
+                // Keep textbox geometry tight to the source PDF bbox / glyph box.
+                let w = if word_level_layout {
+                    (target_w as f32 * 1.01).round().max(200.0) as u32
+                } else if glyph_level_layout {
+                    // Exact glyph advance box — do not inflate or clipping/overlap worsens.
+                    target_w.max(80)
+                } else {
+                    target_w
+                };
+                let h = if glyph_level_layout {
+                    (line.height.max(1.0) * sy).round().max(400.0) as u32
+                } else {
+                    (line.height.max(1.0) * sy * if word_level_layout { 1.08 } else { 1.02 })
+                        .round()
+                        .max(600.0) as u32
+                };
+                // rhwp text baseline ≈ top + 0.85 * box_height (see LineSeg baseline_distance).
+                // Place top so that rendered baseline lands on the PDF text origin.
+                let y = if let Some(baseline) = line.baseline {
+                    let box_h_page = (h as f32) / sy.max(1.0);
+                    let top = baseline - 0.85 * box_h_page;
+                    (top.max(0.0) * sy).round() as u32
+                } else {
+                    (line.y.max(0.0) * sy).round() as u32
+                };
                 let shape = make_textbox_shape(line, x, y, w, h, char_shape_id, z_order);
                 section.paragraphs.push(shape_anchor_paragraph(shape, 0, 200));
                 z_order += 1;
@@ -1671,13 +1828,14 @@ fn main() {
         std::process::exit(1);
     });
 
-    let doc = if let Some(layout) = layout.as_ref() {
+    let mut doc = if let Some(layout) = layout.as_ref() {
         build_pdf_layout_document(&ingest, layout, media_dir.as_deref())
     } else {
         let mut doc = rhwp::document_core::builders::exam_paper::build_exam_paper(&ingest);
         normalize_document_for_hwp(&mut doc, &ingest, media_dir.as_deref());
         doc
     };
+    apply_hancom_compat(&mut doc, &ingest);
     let inferred_format = if output.to_ascii_lowercase().ends_with(".hwpx") { "hwpx" } else { "hwp" };
     let target_format = format.as_deref().unwrap_or(inferred_format);
 
