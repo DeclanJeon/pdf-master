@@ -67,7 +67,7 @@ npm run dev:server
 
 | 기능 | 필요 도구 | 관련 설정 |
 |---|---|---|
-| HWP/HWPX → PDF | LibreOffice `soffice`, 선택적으로 HWPForge, `python3` + `server/hwpx2html.py` | `SOFFICE_PATH`, `HWPFORGE_PATH`, `HWPX2HTML_PATH` |
+| HWP/HWPX → PDF | LibreOffice `soffice`, HwpForge CLI `0.11.1` (`convert-hwp5`), `python3` + `server/hwpx2html.py` | `SOFFICE_PATH`, `HWPFORGE_PATH`, `HWPX2HTML_PATH` |
 | PDF → HWP | rhwp, rhwp-ingest-exporter, LibreOffice, `pdftotext`/`pdftohtml`(poppler-utils), `pdf2docx` | `RHWP_PATH`, `RHWP_INGEST_EXPORTER_PATH`, `SOFFICE_PATH`, `PDFTOTEXT_PATH`, `PDFTOHTML_PATH`, `PDF2DOCX_LAYOUT_MODE` |
 | PDF 암호 설정/해제 | `qpdf` | `QPDF_PATH` 또는 시스템 PATH |
 | 결제/프리미엄 확인 | Polar.sh API/Webhook 키 | `POLAR_ACCESS_TOKEN`, `POLAR_WEBHOOK_SECRET`, `POLAR_ONE_TIME_PRODUCT_ID`, `POLAR_MONTHLY_PRODUCT_ID` |

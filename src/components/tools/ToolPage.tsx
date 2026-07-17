@@ -84,33 +84,33 @@ export function ToolPage() {
   const isBlockedPremiumTool = tool.isPremium && !premiumFreeEnabled
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-4xl">
-      <Link to="/" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-red-600 mb-4">
-        <ArrowLeft className="h-3 w-3" /> 모든 도구
+    <div className="container mx-auto max-w-4xl px-4 py-8">
+      <Link to="/" className="mb-5 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition hover:text-red-600">
+        <ArrowLeft className="h-3.5 w-3.5" /> 모든 도구
       </Link>
 
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold">{tool.name}</h1>
-        <p className="text-muted-foreground mt-1">{tool.description}</p>
-        <div className="flex gap-2 mt-2">
+      <div className="mb-6 rounded-2xl border border-stone-200 bg-white p-5 shadow-sm sm:p-6">
+        <h1 className="text-2xl font-bold tracking-tight text-stone-900 sm:text-3xl">{tool.name}</h1>
+        <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">{tool.description}</p>
+        <div className="mt-3 flex flex-wrap gap-2">
           {tool.isKoreaSpecific && (
-            <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-600">
+            <span className="rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700">
               한국 특화
             </span>
           )}
           {tool.isPremium ? (
-            <span className="rounded-full bg-yellow-100 px-2 py-0.5 text-xs text-yellow-700">
+            <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700">
               프리미엄
             </span>
           ) : (
-            <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-600">
+            <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-700">
               무료
             </span>
           )}
         </div>
       </div>
 
-      <div className="rounded-xl border bg-white p-6">
+      <div className="rounded-2xl border border-stone-200 bg-white p-4 shadow-sm sm:p-6">
         {loading && tool.isPremium ? (
           <div className="py-14 text-center">
             <Loader2 className="mx-auto mb-3 h-9 w-9 animate-spin text-red-600" />
@@ -118,8 +118,8 @@ export function ToolPage() {
           </div>
         ) : isBlockedPremiumTool ? (
           <div className="mx-auto max-w-lg py-12 text-center">
-            <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-yellow-100">
-              <Lock className="h-8 w-8 text-yellow-700" />
+            <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-100">
+              <Lock className="h-8 w-8 text-amber-700" />
             </div>
             <h2 className="mb-2 text-2xl font-bold">프리미엄 기능입니다</h2>
             <p className="mb-6 text-sm text-muted-foreground">

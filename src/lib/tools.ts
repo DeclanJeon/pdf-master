@@ -4,8 +4,8 @@ export const tools: ToolInfo[] = [
   // 변환 (Convert)
   {
     id: 'hwp-to-pdf',
-    name: '한글(HWP) → PDF 변환',
-    description: '한글 문서를 PDF로 변환합니다. 글꼴과 레이아웃을 보존합니다.',
+    name: '한글(HWP/HWPX) → PDF 변환',
+    description: '한글 HWP/HWPX 문서를 PDF로 변환합니다. 글꼴과 레이아웃 보존을 우선합니다.',
     icon: 'FileText',
     category: 'convert' as ToolCategory,
     isPremium: false,
