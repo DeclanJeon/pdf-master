@@ -11,8 +11,10 @@ assert.match(server, /from-json/, 'HWPX must be generated through the HwpForge J
 assert.match(server, /content:\s*\{\s*Table:/, 'structured HWPX must contain a native table');
 assert.match(server, /page_break: 'none'/, 'native HWPX table must remain on the source page');
 assert.match(server, /margin_left: 6700/, 'HWPX must preserve the source table left offset');
-assert.match(server, /margin_top: 9600/, 'HWPX must preserve the source table vertical offset');
+assert.match(server, /margin_top: Math\.max\(0, 9600/, 'HWPX must preserve the source table vertical offset');
+assert.match(server, /pages\.length !== 1/, 'HWPX flow mode must reject unsupported multi-page inputs');
 assert.match(extractor, /"x": (x0|cx)/, 'layout extraction must emit cell coordinates');
+assert.match(server, /tableTopAdjustment/, 'HWPX vertical placement must derive from the extracted table y-coordinate');
 assert.match(server, /const occupied = new Set<string>\(\)/, 'HWPX serialization must account for merged cells');
 assert.ok(fs.existsSync(font), 'Korean searchable-PDF font must be packaged');
 assert.match(extractor, /"row_span": max\(1, row_end - row\)/, 'layout extraction must preserve row spans');

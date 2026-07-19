@@ -1941,7 +1941,9 @@ async function attachSourceImageBackgrounds(ingest: PdfLayoutIngest, inputPath: 
 }
 
 async function createStructuredHwpxFromPdfLayout(ingest: PdfLayoutIngest, outputPath: string, jobDir: string): Promise<void> {
-  const page = ingest.pdf_layout?.pages?.[0];
+  const pages = ingest.pdf_layout?.pages || [];
+  if (pages.length !== 1) throw new Error('구조화된 HWPX 변환은 현재 단일 페이지 PDF만 지원합니다.');
+  const page = pages[0];
   if (!page) throw new Error('PDF layout에 페이지가 없습니다.');
   const table = page.tables?.[0];
   const preLines = (page.lines || [])
@@ -1958,6 +1960,7 @@ async function createStructuredHwpxFromPdfLayout(ingest: PdfLayoutIngest, output
     .filter(Boolean);
   const title = preText.slice().sort((a, b) => b.length - a.length)[0] || 'PDF 문서';
   const slogan = preText.filter((line) => line !== title).slice(0, 1);
+  const tableTopAdjustment = table ? Math.round((table.y - 124.55) * 100) : 0;
   const textParagraph = (text: string): any => ({
     runs: [{ content: { Text: text }, char_shape_id: 0 }],
     para_shape_id: 0,
@@ -2008,7 +2011,7 @@ async function createStructuredHwpxFromPdfLayout(ingest: PdfLayoutIngest, output
       paragraphs,
       page_settings: {
         width: 59528, height: 84188,
-        margin_left: 6700, margin_right: 5000, margin_top: 9600, margin_bottom: 3000,
+        margin_left: 6700, margin_right: 5000, margin_top: Math.max(0, 9600 + tableTopAdjustment), margin_bottom: 3000,
         header_margin: 0, footer_margin: 0, gutter: 0,
         gutter_type: 'LeftOnly', mirror_margins: false, landscape: false,
       },
