@@ -42,6 +42,10 @@ test('real converted.pdf fidelity across HWP/HWPX/DOCX', { skip: !enabled }, asy
   assert.match(extractedText, /2026 익산 하기선교/, 'HWP must contain editable title text');
   assert.match(extractedText, /이\s+름/, 'HWP must contain editable table text');
   assert.match(extractedText, /하기선교훈련/, 'HWP must contain editable merged-cell text');
+  const hwpInfo = execFileSync('rhwp', ['info', outputs.hwp], { encoding: 'utf8' });
+  assert.match(hwpInfo, /표1 .*6행×5열, 셀 17개/, 'HWP must contain one native 6x5 table with merged cells');
+  assert.doesNotMatch(hwpInfo, /표2 /, 'HWP must not duplicate the native table');
+  assert.match(hwpInfo, /NanumGothic/, 'HWP must declare the source-compatible NanumGothic font');
   const renderDir = path.join(tempDir, 'render');
   fs.mkdirSync(renderDir);
   const pdfs = {

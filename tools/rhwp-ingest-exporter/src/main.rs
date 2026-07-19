@@ -1253,7 +1253,8 @@ fn normalize_document_for_hwp(doc: &mut Document, ingest: &IngestDocument, media
 
 fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_dir: Option<&str>) -> Document {
     let visual_mode = layout.visual_mode.as_deref().unwrap_or("source-image-top");
-    let text_above_background = visual_mode == "clean-background-visible-text";
+    let text_above_background =
+        matches!(visual_mode, "editable-native" | "clean-background-visible-text");
     let page_width = mm_to_hwpunit(ingest.page_size.width_mm);
     let page_height = mm_to_hwpunit(ingest.page_size.height_mm);
     let mut doc = rhwp::document_core::builders::exam_paper::build_exam_paper(ingest);
@@ -1366,7 +1367,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
 
     for page in &layout.pages {
         let mut section = Section::default();
-        let mut native_table_paragraphs: Vec<Paragraph> = Vec::new();
+        let mut native_table_paragraphs: Vec<(f32, Paragraph)> = Vec::new();
         let cell_para_shape_id = doc.doc_info.para_shapes.len() as u16;
         doc.doc_info.para_shapes.push(ParaShape {
             margin_left: 0,
@@ -1448,6 +1449,15 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
         if page.background.is_none() {
             for b in &page.boxes {
                 if box_is_inside_table(b, &page.tables) {
+                    continue;
+                }
+                if page.tables.iter().any(|table| {
+                    b.width >= table.width * 0.95
+                        && b.x <= table.x + 2.0
+                        && b.y > table.y + table.height
+                        && b.y - (table.y + table.height) < 25.0
+                        && b.height <= 3.0
+                }) {
                     continue;
                 }
                 let x = (b.x.max(0.0) * sx).round() as u32;
@@ -1557,7 +1567,6 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                             ..Default::default()
                         }
                     }).collect();
-                    eprintln!("[DBG] table.cells={} cells_out={} row_count={} col_count={}", table.cells.len(), cells.len(), row_count, col_count);
                     cells.sort_by_key(|c| (c.row, c.col));
 
                     let table_x = (table.x.max(0.0) * sx).round() as u32;
@@ -1606,10 +1615,11 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                     };
                     native_table.rebuild_grid();
                     let table_height = (native_table.common.height as i32).max(600);
-                    native_table_paragraphs.push(table_anchor_paragraph(native_table, table_y as i32, table_height));
+                    native_table_paragraphs.push((table.y, table_anchor_paragraph(native_table, table_y as i32, table_height)));
             }
         }
 
+        let mut next_table = 0usize;
         if text_above_background {
             // In the default PDF→HWP mode, the cleaned PDF raster is a behind-text
             // visual guide and the extracted text is emitted as ordinary HWP body
@@ -1617,10 +1627,18 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
             // of forcing users to edit text inside drawing objects.
             let mut cursor_y = if page.background.is_some() { 200i32 } else { 0i32 };
             let mut direct_lines = page.lines.iter().collect::<Vec<_>>();
+            native_table_paragraphs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
             direct_lines.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal)));
 
             for line in direct_lines {
+                while next_table < native_table_paragraphs.len()
+                    && native_table_paragraphs[next_table].0 <= line.y
+                {
+                    let (_, table_para) = native_table_paragraphs[next_table].clone();
+                    section.paragraphs.push(table_para);
+                    next_table += 1;
+                }
                 if page.tables.iter().any(|table| {
                     let center_x = line.x + line.width / 2.0;
                     let center_y = line.y + line.height / 2.0;
@@ -1745,6 +1763,11 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                 section.paragraphs.push(shape_anchor_paragraph(shape, 0, 200));
                 z_order += 1;
             }
+            while next_table < native_table_paragraphs.len() {
+                let (_, table_para) = native_table_paragraphs[next_table].clone();
+                section.paragraphs.push(table_para);
+                next_table += 1;
+            }
         }
 
         if section.paragraphs.is_empty() {
@@ -1755,7 +1778,9 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                 page_width as i32,
             ));
         }
-        section.paragraphs.extend(native_table_paragraphs);
+        if !text_above_background {
+            section.paragraphs.extend(native_table_paragraphs.into_iter().map(|(_, paragraph)| paragraph));
+        }
 
         if let Some(last_para) = section.paragraphs.last_mut() {
             last_para.controls.retain(|ctrl| !matches!(ctrl, Control::SectionDef(_)));

@@ -150,7 +150,7 @@ def _detect_tables_from_lines(lines: list[dict]) -> list[dict]:
                     "style": {"stroke": "#000000", "fill": None},
                 }
             else:
-                cells_map[key]["text"] = (cells_map[key]["text"] + " " + text).strip()
+                cells_map[key]["text"] = (cells_map[key]["text"] + "\n" + text).strip()
     # Fill empty grid cells so the HWP table grid is complete.
     for r in range(len(grid_rows)):
         for c in range(len(columns)):
@@ -408,7 +408,7 @@ def detect_tables(boxes: list[dict], lines: list[dict]) -> list[dict]:
                     },
                 }
             else:
-                cells_map[key]["text"] = (cells_map[key]["text"] + " " + line["text"]).strip()
+                cells_map[key]["text"] = (cells_map[key]["text"] + "\n" + line["text"]).strip()
 
         # Ensure empty cells exist for full grid so borders render.
         for r in range(len(row_heights)):
