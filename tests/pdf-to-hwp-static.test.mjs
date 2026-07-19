@@ -50,6 +50,8 @@ assert.match(server, /style:column-width/, 'PDF→HWP A안 must use ODT table co
 assert.match(server, /style:row-height/, 'PDF→HWP A안 must use ODT table row heights instead of guessing all table geometry');
 assert.match(server, /createRhwpIngestFromPdfHtmlLayout/, 'PDF→HWP should create editable coordinate-layout HWP, not page screenshots');
 assert.match(server, /PDF → HWP 변환 \(editable native HWP text\/images\/vector boxes/, 'PDF→HWP default path must be native editable HWP, not page background overlay');
+assert.match(server, /const PDF_HWP_VISUAL_MODE = process\.env\.PDF_HWP_VISUAL_MODE \|\| 'editable-native';/, 'PDF→HWP must default to native editable mode, not page-image insertion');
+assert.match(server, /outputFormat !== 'hwp'/, 'PDF→HWP native path must use line layout so table cells are not duplicated by glyph runs');
 assert.match(server, /pdf_layout/, 'PDF→HWP ingest must carry PDF coordinates for layout reconstruction');
 assert.match(server, /createRhwpIngestFromPdfHtmlLayout\(layoutXml, pageImages\)/, 'PDF→HWP fallback should combine Poppler layout with editable coordinate text');
 assert.match(server, /applyPdfWordBboxLayout\(ingest, bboxLayoutXml\)/, 'PDF→HWP should use Poppler word boxes for tighter editable coordinate extraction');

@@ -1366,6 +1366,18 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
 
     for page in &layout.pages {
         let mut section = Section::default();
+        let mut native_table_paragraphs: Vec<Paragraph> = Vec::new();
+        let cell_para_shape_id = doc.doc_info.para_shapes.len() as u16;
+        doc.doc_info.para_shapes.push(ParaShape {
+            margin_left: 0,
+            margin_right: 0,
+            line_spacing: 100,
+            line_spacing_v2: 100,
+            alignment: Alignment::Center,
+            tab_def_id: 0,
+            border_fill_id: 0,
+            ..Default::default()
+        });
         section.section_def.page_def = PageDef {
             width: page_width,
             height: page_height,
@@ -1523,6 +1535,8 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                         let color = html_color_to_hwp_color(src_cell.color.as_deref());
                         let char_shape_id = char_shape_id_for(&font_name, font_size, src_cell.bold, color, 100, 0);
                         let line_height = ((font_size * 135) / 100).clamp(600, (height as i32).max(600));
+                        let mut cell_paragraph = text_paragraph(text, char_shape_id, line_height, (width as i32).max(200));
+                        cell_paragraph.para_shape_id = cell_para_shape_id;
                         Cell {
                             col,
                             row,
@@ -1537,7 +1551,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                                 bottom: 180,
                             },
                             border_fill_id: table_cell_border_fill_id(&mut doc, src_cell.style.as_ref()),
-                            paragraphs: vec![text_paragraph(text, char_shape_id, line_height, (width as i32).max(200))],
+                            paragraphs: vec![cell_paragraph],
                             vertical_align: VerticalAlign::Center,
                             apply_inner_margin: true,
                             ..Default::default()
@@ -1592,7 +1606,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                     };
                     native_table.rebuild_grid();
                     let table_height = (native_table.common.height as i32).max(600);
-                section.paragraphs.push(table_anchor_paragraph(native_table, table_y as i32, table_height));
+                    native_table_paragraphs.push(table_anchor_paragraph(native_table, table_y as i32, table_height));
             }
         }
 
@@ -1607,6 +1621,14 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                 .then_with(|| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal)));
 
             for line in direct_lines {
+                if page.tables.iter().any(|table| {
+                    let center_x = line.x + line.width / 2.0;
+                    let center_y = line.y + line.height / 2.0;
+                    center_x >= table.x && center_x <= table.x + table.width
+                        && center_y >= table.y && center_y <= table.y + table.height
+                }) {
+                    continue;
+                }
                 let text = line.text.trim();
                 if text.is_empty() {
                     continue;
@@ -1650,6 +1672,14 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
         } else {
             for line in &page.lines {
                 // Glyph layout must keep pure spaces so word gaps match the PDF.
+                if page.tables.iter().any(|table| {
+                    let center_x = line.x + line.width / 2.0;
+                    let center_y = line.y + line.height / 2.0;
+                    center_x >= table.x && center_x <= table.x + table.width
+                        && center_y >= table.y && center_y <= table.y + table.height
+                }) {
+                    continue;
+                }
                 let text = if glyph_level_layout {
                     line.text.clone()
                 } else {
@@ -1725,6 +1755,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                 page_width as i32,
             ));
         }
+        section.paragraphs.extend(native_table_paragraphs);
 
         if let Some(last_para) = section.paragraphs.last_mut() {
             last_para.controls.retain(|ctrl| !matches!(ctrl, Control::SectionDef(_)));

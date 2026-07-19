@@ -74,7 +74,7 @@ const LOCAL_PDF2DOCX_PYTHON_PATH = path.resolve(__dirname, '../.venv-pdf2docx/bi
 const PYTHON_PATH = process.env.PYTHON_PATH
   || (fs.existsSync(LOCAL_PDF2DOCX_PYTHON_PATH) ? LOCAL_PDF2DOCX_PYTHON_PATH : 'python3');
 const PDF_TEXT_ERASE_SCRIPT_PATH = process.env.PDF_TEXT_ERASE_SCRIPT_PATH || path.resolve(__dirname, '../scripts/erase_pdf_text_background.py');
-const PDF_HWP_VISUAL_MODE = process.env.PDF_HWP_VISUAL_MODE || 'source-image-top';
+const PDF_HWP_VISUAL_MODE = process.env.PDF_HWP_VISUAL_MODE || 'editable-native';
 const PDF_HWP_USES_PAGE_BACKGROUND = PDF_HWP_VISUAL_MODE === 'clean-background-visible-text' || PDF_HWP_VISUAL_MODE === 'source-image-top';
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.resolve(__dirname, '../uploads');
 const OUTPUT_DIR = process.env.OUTPUT_DIR || path.resolve(__dirname, '../outputs');
@@ -2035,7 +2035,7 @@ function isHwpxFile(filePath: string): boolean {
   const zipText = data.toString('latin1');
   return zipText.includes('Contents/content.hpf') || zipText.includes('Contents/section');
 }
-async function createRhwpIngestFromPyMuPdfLayout(inputPath: string, jobDir: string): Promise<PdfLayoutIngest> {
+async function createRhwpIngestFromPyMuPdfLayout(inputPath: string, jobDir: string, preferGlyphLayout = true): Promise<PdfLayoutIngest> {
   if (!fs.existsSync(PDF_LAYOUT_EXTRACT_SCRIPT_PATH)) {
     throw new Error(`PDF layout extractor missing: ${PDF_LAYOUT_EXTRACT_SCRIPT_PATH}`);
   }
@@ -2093,7 +2093,7 @@ async function createRhwpIngestFromPyMuPdfLayout(inputPath: string, jobDir: stri
 
   // Prefer per-glyph advances when extractor provides them. This preserves PDF
   // character positions much more tightly than whole-line textboxes.
-  const useGlyphLayout = sourcePages.some((page) => Array.isArray(page.glyphs) && page.glyphs.length > 0);
+  const useGlyphLayout = preferGlyphLayout && sourcePages.some((page) => Array.isArray(page.glyphs) && page.glyphs.length > 0);
   const layoutUnit = useGlyphLayout ? (parsed.glyph_unit || 'pdfglyph') : (parsed.unit || 'pdfpt');
 
   const orderedPages: PdfLayoutPage[] = sourcePages.map((page) => {
@@ -3976,7 +3976,7 @@ async function handlePdfToHwp(req: PremiumRequest, res: Response, outputFormat: 
 
     if (PDF_HWP_PRIMARY_PIPELINE === 'pymupdf-native') {
       try {
-        ingest = await createRhwpIngestFromPyMuPdfLayout(inputPath, jobDir);
+        ingest = await createRhwpIngestFromPyMuPdfLayout(inputPath, jobDir, outputFormat !== 'hwp');
       } catch (nativeErr) {
         console.warn(`[PDF→${outputFormat.toUpperCase()}] pymupdf-native path failed; trying pdf2docx→DOCX: ${nativeErr instanceof Error ? nativeErr.message : nativeErr}`);
       }

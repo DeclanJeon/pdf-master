@@ -240,7 +240,7 @@ def _detect_vector_grid_tables(boxes: list[dict], lines: list[dict]) -> list[dic
             if x0 - 1 <= float(line.get("x", 0)) + float(line.get("width", 0)) / 2 <= x1 + 1
             and y0 - 1 <= float(line.get("baseline", line.get("y", 0))) <= y1 + 1
         ]
-        text = " ".join(str(line.get("text", "")).strip() for line in inside if str(line.get("text", "")).strip())
+        text = "\n".join(str(line.get("text", "")).strip() for line in sorted(inside, key=lambda item: (float(item.get("baseline", item.get("y", 0))), float(item.get("x", 0)))) if str(line.get("text", "")).strip())
         sample = inside[0] if inside else {}
         cells.append({
             "row": row, "col": col,

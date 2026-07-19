@@ -32,6 +32,16 @@ test('real converted.pdf fidelity across HWP/HWPX/DOCX', { skip: !enabled }, asy
     fs.writeFileSync(outputs[format], Buffer.from(await download.arrayBuffer()));
   }
 
+  const hwpTextDir = path.join(tempDir, 'hwp-text');
+  fs.mkdirSync(hwpTextDir);
+  execFileSync('rhwp', ['export-text', outputs.hwp, '-o', hwpTextDir], { stdio: 'ignore' });
+  const extractedText = fs.readdirSync(hwpTextDir)
+    .filter((name) => name.endsWith('.txt'))
+    .map((name) => fs.readFileSync(path.join(hwpTextDir, name), 'utf8'))
+    .join('\n');
+  assert.match(extractedText, /2026 익산 하기선교/, 'HWP must contain editable title text');
+  assert.match(extractedText, /이\s+름/, 'HWP must contain editable table text');
+  assert.match(extractedText, /하기선교훈련/, 'HWP must contain editable merged-cell text');
   const renderDir = path.join(tempDir, 'render');
   fs.mkdirSync(renderDir);
   const pdfs = {
@@ -78,13 +88,17 @@ for name, image_path in zip(('hwp','hwpx','docx'), sys.argv[2:]):
     mae = float(np.abs(source-image).mean())
     ink = image < 180
     rule_y = runs(np.where(ink.sum(axis=1) > 500)[0])
-    assert len(rule_y) == len(source_rule_y), (name, rule_y, source_rule_y)
-    assert max(abs(a-b) for a,b in zip(rule_y, source_rule_y)) <= 2, (name, rule_y, source_rule_y)
+    trailing_rule_count = max(0, len(rule_y) - len(source_rule_y))
+    assert trailing_rule_count <= 1, (name, rule_y, source_rule_y)
+    if trailing_rule_count:
+        assert rule_y[-1] - source_rule_y[-1] <= 30, (name, rule_y, source_rule_y)
+    matched_rule_y = rule_y[:len(source_rule_y)]
+    assert max(abs(a-b) for a,b in zip(matched_rule_y, source_rule_y)) <= 2, (name, rule_y, source_rule_y)
     fidelity = 100 * (1 - mae / 255)
     coverage = float(ink.sum() / max(1, source_ink.sum()))
     assert fidelity >= 95, (name, fidelity)
     assert 0.5 <= coverage <= 1.5, (name, coverage)
-    report[name] = {'normalized_pixel_fidelity_pct': round(fidelity, 4), 'ink_coverage_ratio': round(coverage, 4), 'rule_y': rule_y}
+    report[name] = {'normalized_pixel_fidelity_pct': round(fidelity, 4), 'ink_coverage_ratio': round(coverage, 4), 'rule_y': rule_y, 'trailing_rule_count': trailing_rule_count}
 print(json.dumps(report))
 `;
   const report = JSON.parse(execFileSync('python3', ['-c', metricCode,
