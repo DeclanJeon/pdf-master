@@ -69,7 +69,6 @@ import numpy as np
 source = np.array(Image.open(sys.argv[1]).convert('L'), dtype=np.float32)
 source_ink = source < 180
 source_rules = np.where(source_ink.sum(axis=1) > 500)[0]
-source_pdf = fitz.open(sys.argv[5])
 source_pdf = fitz.open(sys.argv[8])
 assert len(source_pdf) == 1
 source_rect = source_pdf[0].rect
