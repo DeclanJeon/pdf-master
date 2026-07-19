@@ -144,6 +144,12 @@ def _detect_tables_from_lines(lines: list[dict]) -> list[dict]:
             cx = col_edges[c]
             right = float(line.get("x", 0)) + float(line.get("width", 0))
             col_end = _span_end(right, col_edges, c)
+            if col_end > c + 1 and any(
+                c < col_index(float(other.get("x", 0)) + 0.1) < col_end
+                for other in ls
+                if other is not line
+            ):
+                col_end = c + 1
             cw = sum(columns[c:col_end])
             cy = y
             bottom = float(line.get("baseline", line.get("y", 0))) + float(line.get("height", 12))
