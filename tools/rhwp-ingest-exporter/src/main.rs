@@ -309,6 +309,41 @@ fn box_is_inside_table(b: &PdfLayoutBox, tables: &[PdfLayoutTable]) -> bool {
             && cy <= table.y + table.height
     })
 }
+fn line_is_table_cell_duplicate(line: &PdfLayoutLine, tables: &[PdfLayoutTable]) -> bool {
+    let line_key = line.text.split_whitespace().collect::<String>().to_lowercase();
+    if line_key.is_empty() {
+        return false;
+    }
+    let line_center_x = line.x + line.width / 2.0;
+    let line_center_y = line.y + line.height / 2.0;
+    tables.iter().any(|table| {
+        let row_heights = if table.row_heights.is_empty() {
+            vec![table.height.max(1.0)]
+        } else {
+            table.row_heights.clone()
+        };
+        let columns = if table.columns.is_empty() {
+            vec![table.width.max(1.0)]
+        } else {
+            table.columns.clone()
+        };
+        table.cells.iter().any(|cell| {
+            let cell_key = cell.text.split_whitespace().collect::<String>().to_lowercase();
+            if cell_key.is_empty() || cell_key != line_key {
+                return false;
+            }
+            let cell_x = table.x + columns.iter().take(cell.col).sum::<f32>();
+            let cell_y = table.y + row_heights.iter().take(cell.row).sum::<f32>();
+            let cell_width = columns.iter().skip(cell.col).take(cell.col_span.max(1)).sum::<f32>();
+            let cell_height = row_heights.iter().skip(cell.row).take(cell.row_span.max(1)).sum::<f32>();
+            let tolerance = line.height.max(1.0) * 0.5;
+            line_center_x >= cell_x - tolerance
+                && line_center_x <= cell_x + cell_width + tolerance
+                && line_center_y >= cell_y - tolerance
+                && line_center_y <= cell_y + cell_height + tolerance
+        })
+    })
+}
 
 fn table_raw_ctrl_data(common: &CommonObjAttr) -> Vec<u8> {
     let mut data = Vec::with_capacity(42);
@@ -1501,16 +1536,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
             }
         }
 
-        let mut table_line_keys = std::collections::HashSet::new();
         if !page.tables.is_empty() {
-            for table in &page.tables {
-                for cell in &table.cells {
-                    let normalized = cell.text.split_whitespace().collect::<String>().to_lowercase();
-                    if !normalized.is_empty() {
-                        table_line_keys.insert(normalized);
-                    }
-                }
-            }
             for table in &page.tables {
                     let row_count = table.row_heights.len().max(1) as u16;
                     let col_count = table.columns.len().max(1) as u16;
@@ -1651,8 +1677,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                 if text.is_empty() {
                     continue;
                 }
-                let line_key = text.split_whitespace().collect::<String>().to_lowercase();
-                if !line_key.is_empty() && table_line_keys.contains(&line_key) {
+                if line_is_table_cell_duplicate(line, &page.tables) {
                     continue;
                 }
                 let font_name = normalize_font_name(line.font_family.as_deref().unwrap_or(&ingest.default_font), &ingest.default_font);
@@ -1709,8 +1734,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                 if !glyph_level_layout && text.chars().all(|c| c.is_whitespace()) {
                     continue;
                 }
-                let line_key = text.split_whitespace().collect::<String>().to_lowercase();
-                if !line_key.is_empty() && table_line_keys.contains(&line_key) {
+                if line_is_table_cell_duplicate(line, &page.tables) {
                     continue;
                 }
                 let font_name = normalize_font_name(line.font_family.as_deref().unwrap_or(&ingest.default_font), &ingest.default_font);
@@ -1777,9 +1801,6 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                 1000,
                 page_width as i32,
             ));
-        }
-        if !text_above_background {
-            section.paragraphs.extend(native_table_paragraphs.into_iter().map(|(_, paragraph)| paragraph));
         }
 
         if let Some(last_para) = section.paragraphs.last_mut() {

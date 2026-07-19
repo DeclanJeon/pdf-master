@@ -128,19 +128,30 @@ def _detect_tables_from_lines(lines: list[dict]) -> list[dict]:
         tops = [float(l.get("baseline", l.get("y", 0))) for l in ls]
         bots = [float(l.get("baseline", l.get("y", 0)) + l.get("height", 12)) for l in ls]
         row_heights.append(max(bots, default=12) - min(tops, default=0))
+    def _span_end(value: float, edges: list[float], start: int, tolerance: float = 10.0) -> int:
+        for end in range(len(edges) - 1, start + 1, -1):
+            if abs(value - edges[end]) <= tolerance and value >= edges[end - 1] + 3:
+                return end
+        return start + 1
+
     cells_map: dict[tuple[int, int], dict] = {}
+    row_edges = [item[0] for item in grid_rows] + [table_b]
     for r, (y, ls) in enumerate(grid_rows):
         for line in ls:
             c = col_index(float(line.get("x", 0)) + 0.1)
             key = (r, c)
             text = line.get("text", "")
             cx = col_edges[c]
-            cw = columns[c] if c < len(columns) else (table_r - cx)
+            right = float(line.get("x", 0)) + float(line.get("width", 0))
+            col_end = _span_end(right, col_edges, c)
+            cw = sum(columns[c:col_end])
             cy = y
-            ch = row_heights[r] if r < len(row_heights) else 12.0
+            bottom = float(line.get("baseline", line.get("y", 0))) + float(line.get("height", 12))
+            row_end = _span_end(bottom, row_edges, r)
+            ch = sum(row_heights[r:row_end])
             if key not in cells_map:
                 cells_map[key] = {
-                    "row": r, "col": c, "row_span": 1, "col_span": 1,
+                    "row": r, "col": c, "row_span": row_end - r, "col_span": col_end - c,
                     "x": cx, "y": cy, "width": cw, "height": ch,
                     "text": text,
                     "font_family": line.get("font_family"),
@@ -154,15 +165,22 @@ def _detect_tables_from_lines(lines: list[dict]) -> list[dict]:
     # Fill empty grid cells so the HWP table grid is complete.
     for r in range(len(grid_rows)):
         for c in range(len(columns)):
-            if (r, c) not in cells_map:
-                cells_map[(r, c)] = {
-                    "row": r, "col": c, "row_span": 1, "col_span": 1,
-                    "x": col_edges[c],
-                    "y": grid_rows[r][0],
-                    "width": columns[c] if c < len(columns) else (table_r - col_edges[c]),
-                    "height": row_heights[r] if r < len(row_heights) else 12.0,
-                    "text": "", "style": {"stroke": "#000000", "fill": None},
-                }
+            if (r, c) in cells_map:
+                continue
+            if any(
+                cell["row"] <= r < cell["row"] + cell.get("row_span", 1)
+                and cell["col"] <= c < cell["col"] + cell.get("col_span", 1)
+                for cell in cells_map.values()
+            ):
+                continue
+            cells_map[(r, c)] = {
+                "row": r, "col": c, "row_span": 1, "col_span": 1,
+                "x": col_edges[c],
+                "y": grid_rows[r][0],
+                "width": columns[c] if c < len(columns) else (table_r - col_edges[c]),
+                "height": row_heights[r] if r < len(row_heights) else 12.0,
+                "text": "", "style": {"stroke": "#000000", "fill": None},
+            }
     return [{
         "x": table_x, "y": table_y,
         "width": table_r - table_x, "height": table_b - table_y,
@@ -253,14 +271,72 @@ def _detect_vector_grid_tables(boxes: list[dict], lines: list[dict]) -> list[dic
             "color": sample.get("color"),
             "style": {"stroke": "#000000", "fill": box.get("fill")},
         })
-    if not cells:
-        for row, (y0, y1) in enumerate(zip(y_edges, y_edges[1:])):
-            for col, (x0, x1) in enumerate(zip(x_edges, x_edges[1:])):
-                cells.append({
-                    "row": row, "col": col, "row_span": 1, "col_span": 1,
-                    "x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0,
-                    "text": "", "style": {"stroke": "#000000", "fill": None},
-                })
+    if not fills:
+        parent = {(row, col): (row, col) for row in range(len(row_heights)) for col in range(len(columns))}
+
+        def root(cell):
+            while parent[cell] != cell:
+                parent[cell] = parent[parent[cell]]
+                cell = parent[cell]
+            return cell
+
+        def union(a, b):
+            a, b = root(a), root(b)
+            if a != b:
+                parent[b] = a
+
+        def has_vertical(x, y0, y1):
+            return any(
+                abs(float(box["x"]) + float(box.get("width", 0)) / 2 - x) <= 3
+                and float(box["y"]) <= y0 + 2
+                and float(box["y"]) + float(box.get("height", 0)) >= y1 - 2
+                for box in vertical
+            )
+
+        def has_horizontal(y, x0, x1):
+            return any(
+                abs(float(box["y"]) + float(box.get("height", 0)) / 2 - y) <= 3
+                and float(box["x"]) <= x0 + 2
+                and float(box["x"]) + float(box.get("width", 0)) >= x1 - 2
+                for box in horizontal
+            )
+
+        for row in range(len(row_heights)):
+            for col in range(len(columns)):
+                if col + 1 < len(columns) and not has_vertical(
+                    x_edges[col + 1], y_edges[row], y_edges[row + 1]
+                ):
+                    union((row, col), (row, col + 1))
+                if row + 1 < len(row_heights) and not has_horizontal(
+                    y_edges[row + 1], x_edges[col], x_edges[col + 1]
+                ):
+                    union((row, col), (row + 1, col))
+
+        groups = {}
+        for cell in parent:
+            groups.setdefault(root(cell), []).append(cell)
+        for group in groups.values():
+            rows = [cell[0] for cell in group]
+            cols = [cell[1] for cell in group]
+            row, col = min(rows), min(cols)
+            row_span = max(rows) - row + 1
+            col_span = max(cols) - col + 1
+            x0, x1 = x_edges[col], x_edges[col + col_span]
+            y0, y1 = y_edges[row], y_edges[row + row_span]
+            inside = [
+                line for line in lines
+                if x0 - 1 <= float(line.get("x", 0)) + float(line.get("width", 0)) / 2 <= x1 + 1
+                and y0 - 1 <= float(line.get("baseline", line.get("y", 0))) <= y1 + 1
+            ]
+            sample = inside[0] if inside else {}
+            cells.append({
+                "row": row, "col": col, "row_span": row_span, "col_span": col_span,
+                "x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0,
+                "text": "\n".join(str(line.get("text", "")).strip() for line in sorted(inside, key=lambda item: (float(item.get("baseline", item.get("y", 0))), float(item.get("x", 0)))) if str(line.get("text", "")).strip()),
+                "font_family": sample.get("font_family"), "font_size": sample.get("font_size"),
+                "bold": bool(sample.get("bold")), "color": sample.get("color"),
+                "style": {"stroke": "#000000", "fill": None},
+            })
     if fills:
         active_row_count = max((cell["row"] + cell["row_span"] for cell in cells), default=0)
         if 0 < active_row_count < len(row_heights):

@@ -70,10 +70,11 @@ source = np.array(Image.open(sys.argv[1]).convert('L'), dtype=np.float32)
 source_ink = source < 180
 source_rules = np.where(source_ink.sum(axis=1) > 500)[0]
 source_pdf = fitz.open(sys.argv[5])
+source_pdf = fitz.open(sys.argv[8])
 assert len(source_pdf) == 1
 source_rect = source_pdf[0].rect
 assert abs(source_rect.width - 595.28) <= 1 and abs(source_rect.height - 841.89) <= 1, source_rect
-for pdf_path in sys.argv[6:]:
+for pdf_path in sys.argv[5:8]:
     pdf = fitz.open(pdf_path)
     assert len(pdf) == 1, (pdf_path, len(pdf))
     rect = pdf[0].rect
@@ -107,7 +108,7 @@ print(json.dumps(report))
 `;
   const report = JSON.parse(execFileSync('python3', ['-c', metricCode,
     path.join(renderDir, 'source.png'), path.join(renderDir, 'hwp.png'), path.join(renderDir, 'hwpx.png'), path.join(renderDir, 'docx.png'),
-    pdfs.hwp, pdfs.hwpx, pdfs.docx], { encoding: 'utf8' }));
+    pdfs.hwp, pdfs.hwpx, pdfs.docx, inputPath], { encoding: 'utf8' }));
   assert.deepEqual(Object.keys(report).sort(), ['docx', 'hwp', 'hwpx']);
   console.log(JSON.stringify({ fixture: inputPath, report }, null, 2));
 });
