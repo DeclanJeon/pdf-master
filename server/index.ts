@@ -1885,6 +1885,25 @@ async function createRhwpIngestFromPdf2DocxPipeline(inputPath: string, jobDir: s
   return createRhwpIngestFromLibreOfficeOdt(odtExtractDir, jobDir);
 }
 
+async function createRhwpIngestFromDocx(inputPath: string, jobDir: string): Promise<PdfLayoutIngest> {
+  const odtPath = await convertDocxToOdtForRhwpIngest(inputPath, jobDir);
+  const odtExtractDir = path.join(jobDir, 'docx-odt-extract');
+  await extractOdtArchive(odtPath, odtExtractDir);
+  return createRhwpIngestFromLibreOfficeOdt(odtExtractDir, jobDir);
+}
+
+async function exportRhwpHwpxToPdf(hwpxPath: string, pdfPath: string, jobDir: string): Promise<void> {
+  const svgDir = path.join(jobDir, 'rhwp-svg-export');
+  await execFileAsync(RHWP_PATH, ['export-svg', hwpxPath, '-o', svgDir, '--font-style', '--embed-fonts'], {
+    timeout: 120000, env: { ...process.env, LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8' },
+  });
+  const svgFiles = fs.readdirSync(svgDir).filter((f) => f.endsWith('.svg')).sort();
+  if (svgFiles.length === 0) throw new Error('rhwp export-svg produced no SVG');
+  await execFileAsync(PYTHON_PATH, [SVG_TO_SEARCHABLE_PDF_SCRIPT_PATH, svgDir, '-o', pdfPath], {
+    timeout: 120000, env: { ...process.env, LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8' },
+  });
+  if (!fs.existsSync(pdfPath)) throw new Error('HWP→PDF (rhwp) 결과가 생성되지 않았습니다.');
+}
 async function createRhwpIngestFromPyMuPdfLayout(inputPath: string, jobDir: string): Promise<PdfLayoutIngest> {
   if (!fs.existsSync(PDF_LAYOUT_EXTRACT_SCRIPT_PATH)) {
     throw new Error(`PDF layout extractor missing: ${PDF_LAYOUT_EXTRACT_SCRIPT_PATH}`);
@@ -1983,10 +2002,12 @@ async function createRhwpIngestFromPyMuPdfLayout(inputPath: string, jobDir: stri
         fill: box.fill,
         stroke_width: box.stroke_width,
       })),
-      // Structured tables are useful for non-glyph editable layout, but native
-      // HWP table cells do not match PDF absolute glyph positions. Prefer free
-      // boxes+glyphs when unit=pdfglyph.
-      tables: (!useGlyphLayout && Array.isArray((page as any).tables)) ? (page as any).tables : [],
+      // Structured tables: preserve when the extractor detected them, even in
+      // glyph layout mode. HWP table cells are positioned by HWP itself; the
+      // glyph runs inside a detected table region are still shown as editable
+      // text, so dropping tables here was a data-loss bug (tables vanished in
+      // PDF→HWP output). Keep them whenever present.
+      tables: Array.isArray((page as any).tables) ? (page as any).tables : [],
     };
   });
 
@@ -3658,8 +3679,53 @@ app.post('/api/decrypt', requirePremium, upload.single('file'), async (req: Prem
     }
   }
 });
-
 // ============================================================
+// HWP -> DOCX 변환 (HWP -> PDF -> DOCX chain via open-source pdf2docx)
+// ============================================================
+app.post('/api/convert/hwp-to-docx', upload.single('file'), async (req: Request, res: Response) => {
+  if (!req.file) { res.status(400).json({ error: '파일이 없습니다.' }); return; }
+  const originalName = req.file.originalname || '';
+  if (!originalName.toLowerCase().endsWith('.hwp') && !originalName.toLowerCase().endsWith('.hwpx')) {
+    try { fs.unlinkSync(req.file.path); } catch { /* skip */ }
+    return res.status(400).json({ error: 'HWP/HWPX 파일만 변환 가능합니다.', code: 'INVALID_FILE_TYPE' });
+  }
+  const missing: string[] = [];
+  if (!fs.existsSync(PDF2DOCX_SCRIPT_PATH)) missing.push('pdf_to_docx.py');
+  if (!commandAvailable(PYTHON_PATH, ['-c', 'import pdf2docx'])) missing.push('pdf2docx');
+  if (!fs.existsSync(HWPFORGE_PATH) && !fs.existsSync(HWPX2HTML_PATH)) missing.push('hwpforge/hwpx2html');
+  if (missing.length > 0) {
+    if (req.file?.path) { try { fs.unlinkSync(req.file.path); } catch { /* skip */ } }
+    res.status(503).json({ error: `HWP→DOCX 변환에 필요한 구성요소가 없습니다: ${missing.join(', ')}` });
+    return;
+  }
+  const jobId = nanoid();
+  const jobDir = path.join(OUTPUT_DIR, jobId);
+  try {
+    fs.mkdirSync(jobDir, { recursive: true });
+    const inputPath = req.file.path;
+    const isHwpx = originalName.toLowerCase().endsWith('.hwpx');
+    const hwpxPath = isHwpx ? inputPath : path.join(jobDir, 'output.hwpx');
+    if (!isHwpx) {
+      await execFileAsync(HWPFORGE_PATH, ['convert', '--output', hwpxPath, inputPath], { timeout: 120000 });
+    }
+    const pdfPath = path.join(jobDir, 'output.pdf');
+    await exportRhwpHwpxToPdf(hwpxPath, pdfPath, jobDir);
+    const docxPath = await convertPdfToDocxWithPdf2docx(pdfPath, jobDir);
+    if (!isDocxFile(docxPath)) throw new Error('생성된 파일이 유효한 DOCX 형식이 아닙니다.');
+    jobs.set(jobId, {
+      id: jobId, status: 'completed', progress: 100, createdAt: Date.now(),
+      outputPath: docxPath, originalName: req.file.originalname,
+      resultFilename: req.file.originalname.replace(/\.(hwp|hwpx)$/i, '.docx'),
+      deleteAt: Date.now() + 10 * 60 * 1000,
+    });
+    res.json({ jobId, status: 'completed', progress: 100, format: 'docx' });
+  } catch (err: any) {
+    console.error(`[HWP→DOCX] ERROR: ${err.message}`);
+    res.status(500).json({ error: 'DOCX 변환 실패: ' + (err.message || err) });
+  } finally {
+    if (req.file?.path) { try { fs.unlinkSync(req.file.path); } catch { /* skip */ } }
+  }
+});
 // PDF → DOCX 변환 (editable Word document via open-source pdf2docx)
 // ============================================================
 app.post('/api/convert/pdf-to-docx', upload.single('file'), async (req: Request, res: Response) => {
@@ -3707,6 +3773,40 @@ app.post('/api/convert/pdf-to-docx', upload.single('file'), async (req: Request,
   }
 });
 
+// DOCX -> PDF (via LibreOffice)
+app.post('/api/convert/docx-to-pdf', upload.single('file'), async (req: Request, res: Response) => {
+  if (!req.file) { res.status(400).json({ error: '파일이 없습니다.' }); return; }
+  const missing: string[] = [];
+  if (!commandAvailable(SOFFICE_PATH, ['--version'])) missing.push('LibreOffice');
+  if (missing.length > 0) {
+    if (req.file?.path) { try { fs.unlinkSync(req.file.path); } catch { /* skip */ } }
+    res.status(503).json({ error: `DOCX→PDF 변환에 필요한 구성요소가 없습니다: ${missing.join(', ')}` });
+    return;
+  }
+  const jobId = nanoid();
+  const jobDir = path.join(OUTPUT_DIR, jobId);
+  try {
+    fs.mkdirSync(jobDir, { recursive: true });
+    const inputPath = req.file.path;
+    const outputPath = path.join(jobDir, `${path.basename(inputPath, path.extname(inputPath))}.pdf`);
+    await execFileAsync(SOFFICE_PATH, [
+      '--headless', '--convert-to', 'pdf', '--outdir', jobDir, inputPath,
+    ], { timeout: 120000, env: { ...process.env, HOME: '/tmp', LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8', OOO_LOCALE: 'ko' } });
+    if (!fs.existsSync(outputPath)) throw new Error('PDF 출력 파일이 생성되지 않았습니다.');
+    jobs.set(jobId, {
+      id: jobId, status: 'completed', progress: 100, createdAt: Date.now(),
+      outputPath, originalName: req.file.originalname,
+      resultFilename: req.file.originalname.replace(/\.docx$/i, '.pdf'),
+      deleteAt: Date.now() + 10 * 60 * 1000,
+    });
+    res.json({ jobId, status: 'completed', progress: 100, format: 'pdf' });
+  } catch (err: any) {
+    console.error(`[DOCX→PDF] ERROR: ${err.message}`);
+    res.status(500).json({ error: 'PDF 변환 실패: ' + (err.message || err) });
+  } finally {
+    if (req.file?.path) { try { fs.unlinkSync(req.file.path); } catch { /* skip */ } }
+  }
+});
 // ============================================================
 // PDF → HWP 변환 (editable native HWP text/images/vector boxes + rhwp HWP serializer)
 // ============================================================
@@ -3844,6 +3944,46 @@ app.post('/api/convert/pdf-to-hwp', requirePremium, upload.single('file'), async
   }
 });
 
+// DOCX -> HWP (via LibreOffice ODT ingest)
+app.post('/api/convert/docx-to-hwp', upload.single('file'), async (req: Request, res: Response) => {
+  const missing: string[] = [];
+  if (!commandAvailable(SOFFICE_PATH, ['--version'])) missing.push('LibreOffice');
+  if (missing.length > 0) {
+    if (req.file?.path) { try { fs.unlinkSync(req.file.path); } catch { /* skip */ } }
+    pdfToHwpUnavailableResponse(res, missing);
+    return;
+  }
+  const jobId = nanoid();
+  const jobDir = path.join(OUTPUT_DIR, jobId);
+  try {
+    fs.mkdirSync(jobDir, { recursive: true });
+    const inputPath = req.file.path;
+    const ingestPath = path.join(jobDir, 'ingest.json');
+    const outputPath = path.join(jobDir, 'output.hwp');
+    console.log(`[DOCX→HWP] input=${inputPath} ingest=${ingestPath} output=${outputPath}`);
+    const ingest = await createRhwpIngestFromDocx(inputPath, jobDir);
+    fs.writeFileSync(ingestPath, JSON.stringify(ingest, null, 2), 'utf8');
+    await execFileAsync(RHWP_INGEST_EXPORTER_PATH, [
+      ingestPath, '--media-dir', jobDir, '-o', outputPath, '--format', 'hwp',
+    ], { timeout: 120000, env: { ...process.env, LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8' } });
+    if (!fs.existsSync(outputPath)) throw new Error('HWP 출력 파일이 생성되지 않았습니다.');
+    if (!isHwp5File(outputPath)) throw new Error('생성된 파일이 HWP5(OLE) 형식이 아닙니다.');
+    jobs.set(jobId, {
+      id: jobId, status: 'completed', progress: 100, createdAt: Date.now(),
+      outputPath, originalName: req.file.originalname,
+      resultFilename: req.file.originalname.replace(/\.docx$/i, '.hwp'),
+      deleteAt: Date.now() + 10 * 60 * 1000,
+      ownerEmail: req.sessionRecord?.user.email,
+    });
+    consumeOneTimePassForRequest(req);
+    res.json({ jobId, status: 'completed', progress: 100, format: 'hwp' });
+  } catch (err: any) {
+    console.error(`[DOCX→HWP] ERROR: ${err.message}`);
+    res.status(500).json({ error: 'HWP 변환 실패: ' + (err.message || err) });
+  } finally {
+    if (req.file?.path) { try { fs.unlinkSync(req.file.path); } catch { /* skip */ } }
+  }
+});
 // ============================================================
 // Health Check
 // ============================================================

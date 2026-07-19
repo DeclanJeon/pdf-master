@@ -88,9 +88,109 @@ def _cluster_values(values: list[float], tol: float = 3.0) -> list[float]:
             clusters.append([v])
     return [sum(c) / len(c) for c in clusters]
 
+def _detect_tables_from_lines(lines: list[dict]) -> list[dict]:
+    """Group text lines into a table by aligned column x-positions.
+
+    Used when a PDF has no explicit table border boxes but aligns cell text in
+    a grid (common for HWP→PDF vector output). Every line whose text sits on a
+    shared column grid is treated as a table row, including single-column rows
+    (e.g. a merged '총매출 1,200만원 목표 달성' cell). Returns [] when no grid.
+    """
+    if len(lines) < 4:
+        return []
+    # Cluster lines into rows by baseline (y), tolerance 3pt.
+    rows_by_y: dict[float, list[dict]] = {}
+    for line in lines:
+        y = round(float(line.get("baseline", line.get("y", 0))), 1)
+        rows_by_y.setdefault(y, []).append(line)
+    grid_rows = sorted(rows_by_y.items(), key=lambda kv: kv[0])
+    if len(grid_rows) < 2:
+        return []
+    # Collect all distinct column x-starts across every row.
+    all_xs = sorted({round(float(l.get("x", 0)), 1) for _, ls in grid_rows for l in ls})
+    col_edges = _cluster_values(all_xs, tol=14.0)
+    if len(col_edges) < 2:
+        col_edges = [min(all_xs), max(all_xs)]
+    columns = [col_edges[k + 1] - col_edges[k] for k in range(len(col_edges) - 1)]
+
+    def col_index(x: float) -> int:
+        for k in range(len(col_edges) - 1):
+            if col_edges[k] - 2 <= x < col_edges[k + 1] - 0.5:
+                return k
+        return max(0, len(columns) - 1)
+
+    table_y = min(y for y, _ in grid_rows)
+    table_b = max(float(l.get("baseline", l.get("y", 0)) + l.get("height", 12)) for _, ls in grid_rows for l in ls)
+    table_x = min(all_xs)
+    table_r = max(float(l.get("x", 0) + l.get("width", 0)) for _, ls in grid_rows for l in ls)
+
+    cells_map: dict[tuple[int, int], dict] = {}
+    for r, (y, ls) in enumerate(grid_rows):
+        for line in ls:
+            c = col_index(float(line.get("x", 0)) + 0.1)
+            key = (r, c)
+            text = line.get("text", "")
+            if key not in cells_map:
+                cells_map[key] = {
+                    "row": r, "col": c, "row_span": 1, "col_span": 1,
+                    "text": text,
+                    "font_family": line.get("font_family"),
+                    "font_size": line.get("font_size"),
+                    "bold": bool(line.get("bold")),
+                    "color": line.get("color"),
+                    "style": {"stroke": "#000000", "fill": None},
+                }
+            else:
+                cells_map[key]["text"] = (cells_map[key]["text"] + " " + text).strip()
+    # Fill empty grid cells so the HWP table grid is complete.
+    for r in range(len(grid_rows)):
+        for c in range(len(columns)):
+            if (r, c) not in cells_map:
+                cells_map[(r, c)] = {
+                    "row": r, "col": c, "row_span": 1, "col_span": 1,
+                    "text": "", "style": {"stroke": "#000000", "fill": None},
+                }
+    row_heights = []
+    for _, ls in grid_rows:
+        tops = [float(l.get("baseline", l.get("y", 0))) for l in ls]
+        bots = [float(l.get("baseline", l.get("y", 0)) + l.get("height", 12)) for l in ls]
+        row_heights.append(max(bots, default=12) - min(tops, default=0))
+    return [{
+        "x": table_x, "y": table_y,
+        "width": table_r - table_x, "height": table_b - table_y,
+        "columns": columns, "row_heights": row_heights,
+        "cells": [cells_map[k] for k in sorted(cells_map.keys())],
+    }]
+
+def _similar_columns(a: list[float], b: list[float], tol: float = 14.0) -> bool:
+    """True when two column-x lists align within tolerance.
+
+    Relaxed: allows different column counts (e.g. 3-col header vs 2-col body)
+    as long as the shared leading columns align. This lets asymmetric tables
+    (header wider than body) still be detected as one table.
+    """
+    if not a or not b:
+        return False
+    n = min(len(a), len(b))
+    if n == 0:
+        return False
+    # Require first column to align (table left edge) and most others to align.
+    aligned = sum(1 for x, y in zip(a[:n], b[:n]) if abs(x - y) <= tol)
+    return aligned >= max(1, n - 1)
+
 
 def detect_tables(boxes: list[dict], lines: list[dict]) -> list[dict]:
-    """Detect stacked equal-width row rectangles as a lattice table."""
+    """Detect stacked equal-width row rectangles as a lattice table.
+
+    Falls back to line-alignment detection when the PDF has no explicit table
+    border boxes (e.g. HWP→PDF vector output where cells are text only).
+    """
+    # --- Line-alignment fallback: group lines sharing the same baseline (row)
+    #     with 2+ distinct x-start columns into a table. ---
+    line_tables = _detect_tables_from_lines(lines)
+    if line_tables:
+        return line_tables
+
     if len(boxes) < 2:
         return []
 
@@ -101,7 +201,6 @@ def detect_tables(boxes: list[dict], lines: list[dict]) -> list[dict]:
     ]
     if len(rows) < 2:
         return []
-
     rows = sorted(rows, key=lambda b: (b["y"], b["x"]))
     used = set()
     tables: list[dict] = []

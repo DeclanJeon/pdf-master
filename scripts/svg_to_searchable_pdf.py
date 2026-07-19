@@ -120,30 +120,61 @@ def _parse_glyphs(svg: str) -> list[dict]:
     return glyphs
 
 
-def _coalesce_lines(glyphs: list[dict]) -> list[dict]:
+def _coalesce_lines(glyphs: list[dict], rects: list[tuple[float, float, float, float, str | None, str | None, float]] | None = None) -> list[dict]:
+    """Group per-glyph SVG text into lines.
+
+    When ``rects`` (cell borders from the source SVG) are supplied, a glyph that
+    falls outside the current line's cell is forced onto a new line so table
+    cells stay separated instead of merging into one run
+    (e.g. '총매출1,200만원목표 달성' must stay per-cell).
+    """
     if not glyphs:
         return []
 
+    def cell_of(x: float, y: float):
+        if not rects:
+            return None
+        best = None
+        for (rx, ry, rw, rh, *_rest) in rects:
+            # Rect y is the cell top; glyph baseline sits lower inside the cell.
+            # Allow a generous vertical band so cell text is matched to its cell.
+            if rx - 1.0 <= x <= rx + rw + 1.0 and ry - 40.0 <= y <= ry + rh + 40.0:
+                if best is None or rw * rh < best[2] * best[3]:
+                    best = (rx, ry, rw, rh)
+        return best
     groups: list[list[dict]] = []
     current: list[dict] | None = None
     current_key = None
+    current_cell = None
     for glyph in glyphs:
         key = (
-            round(glyph["y"], 2),
             glyph["font_family"],
             glyph["font_size"],
             glyph["fill"],
             glyph["font_weight"],
         )
+        gcell = cell_of(glyph["x"], glyph["y"])
+        same_cell = (
+            current_cell is not None
+            and gcell is not None
+            and abs(gcell[0] - current_cell[0]) < 1.0
+            and abs(gcell[1] - current_cell[1]) < 1.0
+        )
         if (
             current is not None
-            and current_key == key
-            and glyph["x"] >= current[-1]["x"] - 0.01
+            # Prefer cell continuity: if the glyph is in the same cell as the
+            # current run, keep it regardless of tiny y drift (rhwp emits
+            # per-glyph baselines that vary within a cell).
+            and (same_cell or (
+                current_key == key
+                and glyph["x"] >= current[-1]["x"] - 0.01
+            ))
         ):
             current.append(glyph)
             continue
         current = [glyph]
         current_key = key
+        current_cell = gcell
         groups.append(current)
 
     lines: list[dict] = []
@@ -204,7 +235,7 @@ def convert_svg_file(svg_path: Path, pdf_path: Path) -> dict:
 
     rects = _parse_rects(svg)
     images = _parse_images(svg)
-    lines = _coalesce_lines(_parse_glyphs(svg))
+    lines = _coalesce_lines(_parse_glyphs(svg), rects)
 
     document = fitz.open()
     page = document.new_page(width=width_pt, height=height_pt)
