@@ -123,16 +123,25 @@ def _detect_tables_from_lines(lines: list[dict]) -> list[dict]:
     table_b = max(float(l.get("baseline", l.get("y", 0)) + l.get("height", 12)) for _, ls in grid_rows for l in ls)
     table_x = min(all_xs)
     table_r = max(float(l.get("x", 0) + l.get("width", 0)) for _, ls in grid_rows for l in ls)
-
+    row_heights = []
+    for _, ls in grid_rows:
+        tops = [float(l.get("baseline", l.get("y", 0))) for l in ls]
+        bots = [float(l.get("baseline", l.get("y", 0)) + l.get("height", 12)) for l in ls]
+        row_heights.append(max(bots, default=12) - min(tops, default=0))
     cells_map: dict[tuple[int, int], dict] = {}
     for r, (y, ls) in enumerate(grid_rows):
         for line in ls:
             c = col_index(float(line.get("x", 0)) + 0.1)
             key = (r, c)
             text = line.get("text", "")
+            cx = col_edges[c]
+            cw = columns[c] if c < len(columns) else (table_r - cx)
+            cy = y
+            ch = row_heights[r] if r < len(row_heights) else 12.0
             if key not in cells_map:
                 cells_map[key] = {
                     "row": r, "col": c, "row_span": 1, "col_span": 1,
+                    "x": cx, "y": cy, "width": cw, "height": ch,
                     "text": text,
                     "font_family": line.get("font_family"),
                     "font_size": line.get("font_size"),
@@ -148,13 +157,12 @@ def _detect_tables_from_lines(lines: list[dict]) -> list[dict]:
             if (r, c) not in cells_map:
                 cells_map[(r, c)] = {
                     "row": r, "col": c, "row_span": 1, "col_span": 1,
+                    "x": col_edges[c],
+                    "y": grid_rows[r][0],
+                    "width": columns[c] if c < len(columns) else (table_r - col_edges[c]),
+                    "height": row_heights[r] if r < len(row_heights) else 12.0,
                     "text": "", "style": {"stroke": "#000000", "fill": None},
                 }
-    row_heights = []
-    for _, ls in grid_rows:
-        tops = [float(l.get("baseline", l.get("y", 0))) for l in ls]
-        bots = [float(l.get("baseline", l.get("y", 0)) + l.get("height", 12)) for l in ls]
-        row_heights.append(max(bots, default=12) - min(tops, default=0))
     return [{
         "x": table_x, "y": table_y,
         "width": table_r - table_x, "height": table_b - table_y,

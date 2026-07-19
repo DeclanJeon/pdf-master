@@ -223,6 +223,17 @@ def _pick_font(font_family: str, bold: bool) -> str:
         return "cobo" if bold else "cour"
     if "times" in lower:
         return "tibo" if bold else "tiro"
+    # Korean / CJK fonts: map to a system TTF so glyphs render instead of tofu.
+    if any(k in lower for k in ("nanum", "malgun", "gothic", "batang", "dotum", "cjk", "hangul", "noto", "hypp", "함초롬", "맑은", "한", "웅", "궁")):
+        import glob
+        candidates = [
+            str(Path(__file__).resolve().parent.parent / "fonts" / "NanumGothic.ttf"),
+            f"/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc" if bold else f"/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+            f"/usr/share/fonts/opentype/noto/NotoSerifCJK-Bold.ttc" if bold else f"/usr/share/fonts/opentype/noto/NotoSerifCJK-Regular.ttc",
+        ]
+        for c in candidates:
+            if glob.glob(c):
+                return c
     return "hebo" if bold else "helv"
 
 
@@ -266,13 +277,16 @@ def convert_svg_file(svg_path: Path, pdf_path: Path) -> dict:
     for line in lines:
         color = _hex_to_rgb(line["fill"]) or (0, 0, 0)
         fontname = _pick_font(line["font_family"], line["bold"])
-        page.insert_text(
-            fitz.Point(line["x"] * scale, line["y"] * scale),
-            line["text"],
-            fontsize=line["size"] * scale,
-            fontname=fontname,
-            color=color,
-        )
+        tw = fitz.TextWriter(page.rect)
+        if fontname.endswith((".ttf", ".ttc", ".otf")):
+            try:
+                font = fitz.Font(fontfile=fontname)
+            except Exception:
+                font = None
+            tw.append(fitz.Point(line["x"] * scale, line["y"] * scale), line["text"], font=font, fontsize=line["size"] * scale)
+        else:
+            tw.append(fitz.Point(line["x"] * scale, line["y"] * scale), line["text"], font=fitz.Font(fontname), fontsize=line["size"] * scale)
+        tw.write_text(page, color=color)
 
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
     document.save(pdf_path)

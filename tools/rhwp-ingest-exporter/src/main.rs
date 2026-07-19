@@ -1543,6 +1543,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                             ..Default::default()
                         }
                     }).collect();
+                    eprintln!("[DBG] table.cells={} cells_out={} row_count={} col_count={}", table.cells.len(), cells.len(), row_count, col_count);
                     cells.sort_by_key(|c| (c.row, c.col));
 
                     let table_x = (table.x.max(0.0) * sx).round() as u32;
@@ -1591,7 +1592,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                     };
                     native_table.rebuild_grid();
                     let table_height = (native_table.common.height as i32).max(600);
-                section.paragraphs.push(table_anchor_paragraph(native_table, 0, table_height));
+                section.paragraphs.push(table_anchor_paragraph(native_table, table_y as i32, table_height));
             }
         }
 
