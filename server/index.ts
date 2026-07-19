@@ -1965,23 +1965,34 @@ async function createStructuredHwpxFromPdfLayout(ingest: PdfLayoutIngest, output
   const paragraphs = [textParagraph(title), ...slogan.map(textParagraph)];
   if (table && table.columns.length > 0) {
     const cellMap = new Map(table.cells.map((cell) => [`${cell.row}:${cell.col}`, cell]));
+    const occupied = new Set<string>();
+    const tableRows = table.row_heights.map((rowHeight, row) => {
+      const cells = [];
+      for (let col = 0; col < table.columns.length; col += 1) {
+        if (occupied.has(`${row}:${col}`)) continue;
+        const cell = cellMap.get(`${row}:${col}`);
+        const colSpan = Math.max(1, cell?.col_span || 1);
+        const rowSpan = Math.max(1, cell?.row_span || 1);
+        for (let spanRow = row; spanRow < row + rowSpan; spanRow += 1) {
+          for (let spanCol = col; spanCol < col + colSpan; spanCol += 1) {
+            occupied.add(`${spanRow}:${spanCol}`);
+          }
+        }
+        cells.push({
+          paragraphs: [textParagraph(cell?.text || '')],
+          col_span: colSpan,
+          row_span: rowSpan,
+          width: Math.max(300, Math.round(table.columns.slice(col, col + colSpan).reduce((sum, width) => sum + width, 0) * 100)),
+          height: Math.max(300, Math.round(table.row_heights.slice(row, row + rowSpan).reduce((sum, height) => sum + height, 0) * 100)),
+        });
+      }
+      return { height: Math.max(300, Math.round(rowHeight * 100)), cells };
+    });
     paragraphs.push({
       runs: [{
         content: {
           Table: {
-            rows: table.row_heights.map((rowHeight, row) => ({
-              height: Math.max(300, Math.round(rowHeight * 100)),
-              cells: table.columns.map((columnWidth, col) => {
-                const cell = cellMap.get(`${row}:${col}`);
-                return {
-                  paragraphs: [textParagraph(cell?.text || '')],
-                  col_span: cell?.col_span || 1,
-                  row_span: cell?.row_span || 1,
-                  width: Math.max(300, Math.round(columnWidth * 100)),
-                  height: Math.max(300, Math.round(rowHeight * 100)),
-                };
-              }),
-            })),
+            rows: tableRows,
             width: Math.round(table.width * 100),
             page_break: 'none',
             repeat_header: false,
@@ -1997,7 +2008,7 @@ async function createStructuredHwpxFromPdfLayout(ingest: PdfLayoutIngest, output
       paragraphs,
       page_settings: {
         width: 59528, height: 84188,
-        margin_left: 6700, margin_right: 5000, margin_top: 3500, margin_bottom: 3000,
+        margin_left: 6700, margin_right: 5000, margin_top: 9600, margin_bottom: 3000,
         header_margin: 0, footer_margin: 0, gutter: 0,
         gutter_type: 'LeftOnly', mirror_margins: false, landscape: false,
       },

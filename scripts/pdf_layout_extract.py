@@ -217,26 +217,55 @@ def _detect_vector_grid_tables(boxes: list[dict], lines: list[dict]) -> list[dic
     row_heights = [y_edges[i + 1] - y_edges[i] for i in range(len(y_edges) - 1)]
     if any(width < 10 for width in columns) or any(height < 5 for height in row_heights):
         return []
+    fills = [
+        b for b in boxes
+        if b.get("fill")
+        and float(b.get("x", 0)) >= table_x - 2
+        and float(b.get("y", 0)) >= table_y - 2
+        and float(b.get("x", 0)) + float(b.get("width", 0)) <= table_r + 2
+        and float(b.get("y", 0)) + float(b.get("height", 0)) <= table_b + 2
+    ]
     cells = []
-    for row, (y0, y1) in enumerate(zip(y_edges, y_edges[1:])):
-        for col, (x0, x1) in enumerate(zip(x_edges, x_edges[1:])):
-            inside = [
-                line for line in lines
-                if x0 - 1 <= float(line.get("x", 0)) + float(line.get("width", 0)) / 2 <= x1 + 1
-                and y0 - 1 <= float(line.get("baseline", line.get("y", 0))) <= y1 + 1
-            ]
-            text = " ".join(str(line.get("text", "")).strip() for line in inside if str(line.get("text", "")).strip())
-            sample = inside[0] if inside else {}
-            cells.append({
-                "row": row, "col": col, "row_span": 1, "col_span": 1,
-                "x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0,
-                "text": text,
-                "font_family": sample.get("font_family"),
-                "font_size": sample.get("font_size"),
-                "bold": bool(sample.get("bold")),
-                "color": sample.get("color"),
-                "style": {"stroke": "#000000", "fill": None},
-            })
+    for box in fills:
+        x0 = float(box["x"])
+        y0 = float(box["y"])
+        x1 = x0 + float(box["width"])
+        y1 = y0 + float(box["height"])
+        col = min(range(len(x_edges) - 1), key=lambda index: abs(x_edges[index] - x0))
+        row = min(range(len(y_edges) - 1), key=lambda index: abs(y_edges[index] - y0))
+        col_end = min(range(1, len(x_edges)), key=lambda index: abs(x_edges[index] - x1))
+        row_end = min(range(1, len(y_edges)), key=lambda index: abs(y_edges[index] - y1))
+        inside = [
+            line for line in lines
+            if x0 - 1 <= float(line.get("x", 0)) + float(line.get("width", 0)) / 2 <= x1 + 1
+            and y0 - 1 <= float(line.get("baseline", line.get("y", 0))) <= y1 + 1
+        ]
+        text = " ".join(str(line.get("text", "")).strip() for line in inside if str(line.get("text", "")).strip())
+        sample = inside[0] if inside else {}
+        cells.append({
+            "row": row, "col": col,
+            "row_span": max(1, row_end - row), "col_span": max(1, col_end - col),
+            "x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0,
+            "text": text,
+            "font_family": sample.get("font_family"),
+            "font_size": sample.get("font_size"),
+            "bold": bool(sample.get("bold")),
+            "color": sample.get("color"),
+            "style": {"stroke": "#000000", "fill": box.get("fill")},
+        })
+    if not cells:
+        for row, (y0, y1) in enumerate(zip(y_edges, y_edges[1:])):
+            for col, (x0, x1) in enumerate(zip(x_edges, x_edges[1:])):
+                cells.append({
+                    "row": row, "col": col, "row_span": 1, "col_span": 1,
+                    "x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0,
+                    "text": "", "style": {"stroke": "#000000", "fill": None},
+                })
+    if fills:
+        active_row_count = max((cell["row"] + cell["row_span"] for cell in cells), default=0)
+        if 0 < active_row_count < len(row_heights):
+            row_heights = row_heights[:active_row_count]
+            table_b = y_edges[active_row_count]
     return [{
         "x": table_x, "y": table_y, "width": table_r - table_x, "height": table_b - table_y,
         "columns": columns, "row_heights": row_heights, "cells": cells,
