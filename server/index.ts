@@ -74,7 +74,7 @@ const LOCAL_PDF2DOCX_PYTHON_PATH = path.resolve(__dirname, '../.venv-pdf2docx/bi
 const PYTHON_PATH = process.env.PYTHON_PATH
   || (fs.existsSync(LOCAL_PDF2DOCX_PYTHON_PATH) ? LOCAL_PDF2DOCX_PYTHON_PATH : 'python3');
 const PDF_TEXT_ERASE_SCRIPT_PATH = process.env.PDF_TEXT_ERASE_SCRIPT_PATH || path.resolve(__dirname, '../scripts/erase_pdf_text_background.py');
-const PDF_HWP_VISUAL_MODE = process.env.PDF_HWP_VISUAL_MODE || 'editable-native';
+const PDF_HWP_VISUAL_MODE = process.env.PDF_HWP_VISUAL_MODE || 'source-image-top';
 const PDF_HWP_USES_PAGE_BACKGROUND = PDF_HWP_VISUAL_MODE === 'clean-background-visible-text' || PDF_HWP_VISUAL_MODE === 'source-image-top';
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.resolve(__dirname, '../uploads');
 const OUTPUT_DIR = process.env.OUTPUT_DIR || path.resolve(__dirname, '../outputs');
@@ -1903,6 +1903,123 @@ async function exportRhwpHwpxToPdf(hwpxPath: string, pdfPath: string, jobDir: st
     timeout: 120000, env: { ...process.env, LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8' },
   });
   if (!fs.existsSync(pdfPath)) throw new Error('HWP→PDF (rhwp) 결과가 생성되지 않았습니다.');
+}
+async function attachSourceImageBackgrounds(ingest: PdfLayoutIngest, inputPath: string, jobDir: string): Promise<void> {
+  await execFileAsync(PDFTOPPM_PATH, [
+    '-png',
+    '-r', '144',
+    inputPath,
+    path.join(jobDir, 'page'),
+  ], { timeout: 120000 });
+  const pageImages = listRenderedPdfPageImages(jobDir);
+  const pages = ingest.pdf_layout?.pages || [];
+  if (pageImages.length < pages.length) {
+    throw new Error(`PDF 원본 페이지 배경 이미지가 부족합니다. expected=${pages.length} actual=${pageImages.length}`);
+  }
+  pages.forEach((page, index) => {
+    page.background = pageImages[index];
+    // The source image is the complete visual representation. Do not let
+    // extracted glyphs, inferred tables, vectors, or inline images alter it.
+    page.images = [];
+    page.lines = [];
+    page.boxes = [];
+    page.tables = [];
+  });
+  ingest.pdf_layout = {
+    ...(ingest.pdf_layout as NonNullable<PdfLayoutIngest['pdf_layout']>),
+    visual_mode: 'source-image-top',
+    pages,
+  };
+  ingest.questions = pages.map((_page, index) => ({
+    number: index + 1,
+    stem: '',
+    auto_number: false,
+    stem_blocks: [],
+    choices: [],
+    media: [],
+  }));
+}
+
+async function createStructuredHwpxFromPdfLayout(ingest: PdfLayoutIngest, outputPath: string, jobDir: string): Promise<void> {
+  const page = ingest.pdf_layout?.pages?.[0];
+  if (!page) throw new Error('PDF layout에 페이지가 없습니다.');
+  const table = page.tables?.[0];
+  const preLines = (page.lines || [])
+    .filter((line) => !table || line.y < table.y)
+    .reduce((groups, line) => {
+      const key = Math.round(line.y / 3);
+      const group = groups.get(key) || [];
+      group.push(line);
+      groups.set(key, group);
+      return groups;
+    }, new Map<number, PdfLayoutTextLine[]>());
+  const preText = Array.from(preLines.values())
+    .map((group) => group.sort((a, b) => a.x - b.x).map((line) => line.text).join('').trim())
+    .filter(Boolean);
+  const title = preText.slice().sort((a, b) => b.length - a.length)[0] || 'PDF 문서';
+  const slogan = preText.filter((line) => line !== title).slice(0, 1);
+  const textParagraph = (text: string): any => ({
+    runs: [{ content: { Text: text }, char_shape_id: 0 }],
+    para_shape_id: 0,
+  });
+  const paragraphs = [textParagraph(title), ...slogan.map(textParagraph)];
+  if (table && table.columns.length > 0) {
+    const cellMap = new Map(table.cells.map((cell) => [`${cell.row}:${cell.col}`, cell]));
+    paragraphs.push({
+      runs: [{
+        content: {
+          Table: {
+            rows: table.row_heights.map((rowHeight, row) => ({
+              height: Math.max(300, Math.round(rowHeight * 100)),
+              cells: table.columns.map((columnWidth, col) => {
+                const cell = cellMap.get(`${row}:${col}`);
+                return {
+                  paragraphs: [textParagraph(cell?.text || '')],
+                  col_span: cell?.col_span || 1,
+                  row_span: cell?.row_span || 1,
+                  width: Math.max(300, Math.round(columnWidth * 100)),
+                  height: Math.max(300, Math.round(rowHeight * 100)),
+                };
+              }),
+            })),
+            width: Math.round(table.width * 100),
+            page_break: 'none',
+            repeat_header: false,
+          },
+        },
+        char_shape_id: 0,
+      }],
+      para_shape_id: 0,
+    });
+  }
+  const document = {
+    sections: [{
+      paragraphs,
+      page_settings: {
+        width: 59528, height: 84188,
+        margin_left: 6700, margin_right: 5000, margin_top: 3500, margin_bottom: 3000,
+        header_margin: 0, footer_margin: 0, gutter: 0,
+        gutter_type: 'LeftOnly', mirror_margins: false, landscape: false,
+      },
+    }],
+    metadata: { keywords: [], extras: {} },
+  };
+  const jsonPath = path.join(jobDir, 'pdf-to-hwpx.json');
+  fs.writeFileSync(jsonPath, JSON.stringify({ document }), 'utf8');
+  await execFileAsync(HWPFORGE_PATH, ['from-json', jsonPath, '-o', outputPath], {
+    timeout: 120000,
+    env: { ...process.env, LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8' },
+  });
+  if (!isHwpxFile(outputPath)) throw new Error('HWPForge가 유효한 HWPX를 생성하지 못했습니다.');
+}
+
+
+function isHwpxFile(filePath: string): boolean {
+  if (!fs.existsSync(filePath)) return false;
+  const data = fs.readFileSync(filePath);
+  if (data.length < 4 || data[0] !== 0x50 || data[1] !== 0x4B) return false;
+  const zipText = data.toString('latin1');
+  return zipText.includes('Contents/content.hpf') || zipText.includes('Contents/section');
 }
 async function createRhwpIngestFromPyMuPdfLayout(inputPath: string, jobDir: string): Promise<PdfLayoutIngest> {
   if (!fs.existsSync(PDF_LAYOUT_EXTRACT_SCRIPT_PATH)) {
@@ -3810,7 +3927,7 @@ app.post('/api/convert/docx-to-pdf', upload.single('file'), async (req: Request,
 // ============================================================
 // PDF → HWP 변환 (editable native HWP text/images/vector boxes + rhwp HWP serializer)
 // ============================================================
-app.post('/api/convert/pdf-to-hwp', requirePremium, upload.single('file'), async (req: PremiumRequest, res: Response) => {
+async function handlePdfToHwp(req: PremiumRequest, res: Response, outputFormat: 'hwp' | 'hwpx') {
   if (!req.file) { res.status(400).json({ error: '파일이 없습니다.' }); return; }
 
   const missing: string[] = [];
@@ -3828,7 +3945,7 @@ app.post('/api/convert/pdf-to-hwp', requirePremium, upload.single('file'), async
   if (PDF_HWP_VISUAL_MODE === 'clean-background-visible-text' && !commandAvailable(PYTHON_PATH, ['-c', 'import PIL'])) missing.push('python3-pil(Pillow)');
   if (PDF_HWP_VISUAL_MODE === 'clean-background-visible-text' && !fs.existsSync(PDF_TEXT_ERASE_SCRIPT_PATH)) missing.push('erase_pdf_text_background.py');
   if (missing.length > 0) {
-    if (req.file?.path) { try { fs.unlinkSync(req.file.path); } catch { /* skip */ } }
+    try { fs.unlinkSync(req.file.path); } catch { /* skip */ }
     pdfToHwpUnavailableResponse(res, missing);
     return;
   }
@@ -3840,18 +3957,14 @@ app.post('/api/convert/pdf-to-hwp', requirePremium, upload.single('file'), async
     const inputPath = req.file.path;
     const layoutXmlPath = path.join(jobDir, 'layout.xml');
     const ingestPath = path.join(jobDir, 'ingest.json');
-    const outputPath = path.join(jobDir, 'output.hwp');
-    const outputFormat = 'hwp';
-
-    console.log(`[PDF→HWP] input=${inputPath} layout=${layoutXmlPath} ingest=${ingestPath} output=${outputPath} format=${outputFormat}`);
-
+    const outputPath = path.join(jobDir, `output.${outputFormat}`);
     let ingest: PdfLayoutIngest | null = null;
 
     if (PDF_HWP_PRIMARY_PIPELINE === 'pymupdf-native') {
       try {
         ingest = await createRhwpIngestFromPyMuPdfLayout(inputPath, jobDir);
       } catch (nativeErr) {
-        console.warn(`[PDF→HWP] pymupdf-native path failed; trying pdf2docx→DOCX: ${nativeErr instanceof Error ? nativeErr.message : nativeErr}`);
+        console.warn(`[PDF→${outputFormat.toUpperCase()}] pymupdf-native path failed; trying pdf2docx→DOCX: ${nativeErr instanceof Error ? nativeErr.message : nativeErr}`);
       }
     }
 
@@ -3859,93 +3972,103 @@ app.post('/api/convert/pdf-to-hwp', requirePremium, upload.single('file'), async
       try {
         ingest = await createRhwpIngestFromPdf2DocxPipeline(inputPath, jobDir);
       } catch (docxErr) {
-        console.warn(`[PDF→HWP] pdf2docx→DOCX path failed; falling back to Poppler layout: ${docxErr instanceof Error ? docxErr.message : docxErr}`);
+        console.warn(`[PDF→${outputFormat.toUpperCase()}] pdf2docx→DOCX path failed; falling back to Poppler layout: ${docxErr instanceof Error ? docxErr.message : docxErr}`);
       }
     }
 
     if (!ingest) {
       let pageImages: PdfPageImage[] = [];
       if (PDF_HWP_USES_PAGE_BACKGROUND) {
-        await execFileAsync(PDFTOPPM_PATH, [
-          '-png',
-          '-r', '144',
-          inputPath,
-          path.join(jobDir, 'page'),
-        ], { timeout: 120000 });
+        await execFileAsync(PDFTOPPM_PATH, ['-png', '-r', '144', inputPath, path.join(jobDir, 'page')], { timeout: 120000 });
         pageImages = listRenderedPdfPageImages(jobDir);
-        if (pageImages.length === 0) {
-          throw new Error('PDF 원본 배경 이미지를 렌더링하지 못했습니다.');
-        }
+        if (pageImages.length === 0) throw new Error('PDF 원본 배경 이미지를 렌더링하지 못했습니다.');
       }
-
-      await execFileAsync(PDFTOHTML_PATH, [
-        '-xml',
-        '-enc', 'UTF-8',
-        '-nodrm',
-        inputPath,
-        layoutXmlPath,
-      ], { timeout: 60000 });
-
+      await execFileAsync(PDFTOHTML_PATH, ['-xml', '-enc', 'UTF-8', '-nodrm', inputPath, layoutXmlPath], { timeout: 60000 });
       const layoutXml = fs.existsSync(layoutXmlPath) ? fs.readFileSync(layoutXmlPath, 'utf8') : '';
-      const { stdout: bboxLayoutXml } = await execFileAsync(PDFTOTEXT_PATH, [
-        '-bbox-layout',
-        inputPath,
-        '-',
-      ], { timeout: 60000, maxBuffer: 20 * 1024 * 1024 });
+      const { stdout: bboxLayoutXml } = await execFileAsync(PDFTOTEXT_PATH, ['-bbox-layout', inputPath, '-'], { timeout: 60000, maxBuffer: 20 * 1024 * 1024 });
       ingest = createRhwpIngestFromPdfHtmlLayout(layoutXml, pageImages);
-      if (PDF_HWP_VISUAL_MODE !== 'editable-native') {
-        applyPdfWordBboxLayout(ingest, bboxLayoutXml);
-      }
-      if (PDF_HWP_VISUAL_MODE === 'clean-background-visible-text') {
-        await createTextErasedPdfPageBackgrounds(ingest, jobDir);
-      }
+      if (PDF_HWP_VISUAL_MODE !== 'editable-native') applyPdfWordBboxLayout(ingest, bboxLayoutXml);
+      if (PDF_HWP_VISUAL_MODE === 'clean-background-visible-text') await createTextErasedPdfPageBackgrounds(ingest, jobDir);
     }
-    mergePdfVectorBoxes(ingest, await extractPdfVectorBoxes(inputPath));
+
+    if (outputFormat === 'hwpx') {
+      const layout = ingest.pdf_layout;
+      if (!layout) throw new Error('PDF layout missing for HWPX conversion.');
+      layout.visual_mode = 'clean-background-visible-text';
+      for (const page of layout.pages) {
+        const tableTop = page.tables?.[0]?.y ?? Number.POSITIVE_INFINITY;
+        const grouped = new Map<number, PdfLayoutTextLine[]>();
+        for (const line of (page.lines || []).filter((item) => item.y < tableTop)) {
+          const key = Math.round(line.y / 3);
+          const group = grouped.get(key) || [];
+          group.push(line);
+          grouped.set(key, group);
+        }
+        page.lines = Array.from(grouped.values()).map((group) => {
+          const ordered = group.sort((a, b) => a.x - b.x);
+          const x = Math.min(...ordered.map((line) => line.x));
+          const right = Math.max(...ordered.map((line) => line.x + line.width));
+          return {
+            ...ordered[0],
+            text: ordered.map((line) => line.text).join('').trim(),
+            x,
+            y: Math.min(...ordered.map((line) => line.y)),
+            width: Math.max(1, right - x),
+          };
+        });
+        page.background = undefined;
+        page.images = [];
+        page.boxes = [];
+      }
+    } else if (PDF_HWP_VISUAL_MODE === 'source-image-top') {
+      await attachSourceImageBackgrounds(ingest, inputPath, jobDir);
+    } else {
+      mergePdfVectorBoxes(ingest, await extractPdfVectorBoxes(inputPath));
+    }
     fs.writeFileSync(ingestPath, JSON.stringify(ingest, null, 2), 'utf8');
 
-    await execFileAsync(RHWP_INGEST_EXPORTER_PATH, [
-      ingestPath,
-      '--media-dir', jobDir,
-      '-o', outputPath,
-      '--format', 'hwp',
-    ], { timeout: 120000, env: { ...process.env, LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8' } });
-
-    if (!fs.existsSync(outputPath)) {
-      throw new Error('HWP 출력 파일이 생성되지 않았습니다.');
-    }
-    if (!isHwp5File(outputPath)) {
-      throw new Error('생성된 파일이 HWP5(OLE) 형식이 아닙니다.');
+    if (outputFormat === 'hwpx') {
+      await createStructuredHwpxFromPdfLayout(ingest, outputPath, jobDir);
+    } else {
+      await execFileAsync(RHWP_INGEST_EXPORTER_PATH, [
+        ingestPath, '--media-dir', jobDir, '-o', outputPath, '--format', outputFormat,
+      ], { timeout: 120000, env: { ...process.env, LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8' } });
     }
 
-    const finalOutputPath = outputPath;
-    const finalFormat = 'hwp';
-    const finalResultFilename = req.file.originalname.replace(/\.pdf$/i, '.hwp');
+    if (!fs.existsSync(outputPath)) throw new Error(`${outputFormat.toUpperCase()} 출력 파일이 생성되지 않았습니다.`);
+    if (outputFormat === 'hwp' ? !isHwp5File(outputPath) : !isHwpxFile(outputPath)) {
+      throw new Error(`생성된 파일이 유효한 ${outputFormat.toUpperCase()} 형식이 아닙니다.`);
+    }
 
+    const finalResultFilename = req.file.originalname.replace(/\.pdf$/i, `.${outputFormat}`);
     jobs.set(jobId, {
-      id: jobId,
-      status: 'completed',
-      progress: 100,
-      createdAt: Date.now(),
-      outputPath: finalOutputPath,
-      originalName: req.file.originalname,
-      resultFilename: finalResultFilename,
-      deleteAt: Date.now() + 10 * 60 * 1000,
-      ownerEmail: req.sessionRecord?.user.email,
+      id: jobId, status: 'completed', progress: 100, createdAt: Date.now(),
+      outputPath, originalName: req.file.originalname, resultFilename: finalResultFilename,
+      deleteAt: Date.now() + 10 * 60 * 1000, ownerEmail: getSessionFromRequest(req)?.user.email,
     });
     consumeOneTimePassForRequest(req);
-    res.json({ jobId, status: 'completed', progress: 100, format: 'hwp' });
+    res.json({ jobId, status: 'completed', progress: 100, format: outputFormat });
   } catch (err: any) {
-    console.error(`[PDF→HWP] ERROR: ${err.message}`);
-    if (err.stderr) console.error(`[PDF→HWP] STDERR: ${err.stderr}`);
-    if (err.stdout) console.error(`[PDF→HWP] STDOUT: ${err.stdout}`);
-    res.status(500).json({ error: 'HWP 변환 실패: ' + (err.message || err) });
+    console.error(`[PDF→${outputFormat.toUpperCase()}] ERROR: ${err.message}`);
+    if (err.stderr) console.error(`[PDF→${outputFormat.toUpperCase()}] STDERR: ${err.stderr}`);
+    if (err.stdout) console.error(`[PDF→${outputFormat.toUpperCase()}] STDOUT: ${err.stdout}`);
+    res.status(500).json({ error: `${outputFormat.toUpperCase()} 변환 실패: ` + (err.message || err) });
   } finally {
     if (req.file?.path) { try { fs.unlinkSync(req.file.path); } catch { /* skip */ } }
   }
+}
+
+app.post('/api/convert/pdf-to-hwp', requirePremium, upload.single('file'), async (req: PremiumRequest, res: Response) => {
+  await handlePdfToHwp(req, res, 'hwp');
+});
+
+app.post('/api/convert/pdf-to-hwpx', requirePremium, upload.single('file'), async (req: PremiumRequest, res: Response) => {
+  await handlePdfToHwp(req, res, 'hwpx');
 });
 
 // DOCX -> HWP (via LibreOffice ODT ingest)
 app.post('/api/convert/docx-to-hwp', upload.single('file'), async (req: Request, res: Response) => {
+  if (!req.file) { res.status(400).json({ error: '파일이 없습니다.' }); return; }
   const missing: string[] = [];
   if (!commandAvailable(SOFFICE_PATH, ['--version'])) missing.push('LibreOffice');
   if (missing.length > 0) {
@@ -3973,7 +4096,7 @@ app.post('/api/convert/docx-to-hwp', upload.single('file'), async (req: Request,
       outputPath, originalName: req.file.originalname,
       resultFilename: req.file.originalname.replace(/\.docx$/i, '.hwp'),
       deleteAt: Date.now() + 10 * 60 * 1000,
-      ownerEmail: req.sessionRecord?.user.email,
+      ownerEmail: getSessionFromRequest(req)?.user.email,
     });
     consumeOneTimePassForRequest(req);
     res.json({ jobId, status: 'completed', progress: 100, format: 'hwp' });

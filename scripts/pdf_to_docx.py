@@ -560,6 +560,7 @@ def create_layout_docx(pdf_doc, mode: str, start: int, end: int) -> bytes:
     return buf.getvalue()
 
 
+
 def create_faithful_docx_with_pdf2docx(input_path: str, output_path: str, start: int, end: int):
     cv = Converter(input_path)
     try:
@@ -584,6 +585,44 @@ def create_faithful_docx_with_pdf2docx(input_path: str, output_path: str, start:
     finally:
         cv.close()
     _inject_vector_fill_shapes_into_docx(input_path, output_path, start, end)
+def create_visual_fidelity_docx(input_path: str, output_path: str, start: int, end: int):
+    """Create a pixel-faithful DOCX with the source page rendered as a full-page image."""
+    pdf_doc = fitz.open(input_path)
+    try:
+        page_count = len(pdf_doc)
+        first = max(0, start)
+        last = page_count - 1 if end < 0 else min(end, page_count - 1)
+        if first > last:
+            raise ValueError("변환할 PDF 페이지 범위가 올바르지 않습니다")
+
+        doc = Document()
+        for output_index, page_index in enumerate(range(first, last + 1)):
+            page = pdf_doc[page_index]
+            page_data = {"width": page.rect.width, "height": page.rect.height}
+            section = doc.sections[0] if output_index == 0 else doc.add_section(WD_SECTION.NEW_PAGE)
+            _configure_section(section, page_data, "absolute")
+            section.header_distance = Mm(0)
+            section.footer_distance = Mm(0)
+
+            pixmap = page.get_pixmap(dpi=150, alpha=False)
+            image_para = doc.add_paragraph()
+            image_para.paragraph_format.space_before = Pt(0)
+            image_para.paragraph_format.space_after = Pt(0)
+            image_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            image_para.paragraph_format.left_indent = Pt(0)
+            image_para.paragraph_format.first_line_indent = Pt(0)
+            image_para.paragraph_format.line_spacing = 1
+            run = image_para.add_run()
+            run.add_picture(
+                io.BytesIO(pixmap.tobytes("png")),
+                width=Mm(page.rect.width * PT_TO_MM),
+                height=Mm(page.rect.height * PT_TO_MM),
+            )
+
+
+        doc.save(output_path)
+    finally:
+        pdf_doc.close()
 
 def _inject_vector_fill_shapes_into_docx(pdf_path: str, docx_path: str, start: int = 0, end: int = -1):
     """pdf2docx DOCX에 누락된 채움 사각형을 DrawingML 앵커 도형으로 보강."""
@@ -754,7 +793,7 @@ def main():
 
     if mode == "faithful":
         pdf_doc.close()
-        create_faithful_docx_with_pdf2docx(args.input, args.output, args.start, args.end)
+        create_visual_fidelity_docx(args.input, args.output, args.start, args.end)
     else:
         docx_bytes = create_layout_docx(pdf_doc, mode, args.start, args.end)
         with open(args.output, "wb") as f:

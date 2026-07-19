@@ -187,16 +187,76 @@ def _similar_columns(a: list[float], b: list[float], tol: float = 14.0) -> bool:
     return aligned >= max(1, n - 1)
 
 
+def _detect_vector_grid_tables(boxes: list[dict], lines: list[dict]) -> list[dict]:
+    """Build a table from explicit PDF border lines before text heuristics."""
+    horizontal = [
+        b for b in boxes
+        if float(b.get("width", 0)) >= 100 and float(b.get("height", 0)) <= 3
+        and b.get("stroke")
+    ]
+    vertical = [
+        b for b in boxes
+        if float(b.get("height", 0)) >= 20 and float(b.get("width", 0)) <= 3
+        and b.get("stroke")
+    ]
+    if len(horizontal) < 3 or len(vertical) < 3:
+        return []
+    x_edges = _cluster_values(
+        [float(b["x"]) for b in vertical] + [float(b["x"]) + float(b["width"]) for b in vertical],
+        tol=3.0,
+    )
+    y_edges = _cluster_values(
+        [float(b["y"]) for b in horizontal] + [float(b["y"]) + float(b["height"]) for b in horizontal],
+        tol=3.0,
+    )
+    if len(x_edges) < 2 or len(y_edges) < 2:
+        return []
+    table_x, table_r = min(x_edges), max(x_edges)
+    table_y, table_b = min(y_edges), max(y_edges)
+    columns = [x_edges[i + 1] - x_edges[i] for i in range(len(x_edges) - 1)]
+    row_heights = [y_edges[i + 1] - y_edges[i] for i in range(len(y_edges) - 1)]
+    if any(width < 10 for width in columns) or any(height < 5 for height in row_heights):
+        return []
+    cells = []
+    for row, (y0, y1) in enumerate(zip(y_edges, y_edges[1:])):
+        for col, (x0, x1) in enumerate(zip(x_edges, x_edges[1:])):
+            inside = [
+                line for line in lines
+                if x0 - 1 <= float(line.get("x", 0)) + float(line.get("width", 0)) / 2 <= x1 + 1
+                and y0 - 1 <= float(line.get("baseline", line.get("y", 0))) <= y1 + 1
+            ]
+            text = " ".join(str(line.get("text", "")).strip() for line in inside if str(line.get("text", "")).strip())
+            sample = inside[0] if inside else {}
+            cells.append({
+                "row": row, "col": col, "row_span": 1, "col_span": 1,
+                "x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0,
+                "text": text,
+                "font_family": sample.get("font_family"),
+                "font_size": sample.get("font_size"),
+                "bold": bool(sample.get("bold")),
+                "color": sample.get("color"),
+                "style": {"stroke": "#000000", "fill": None},
+            })
+    return [{
+        "x": table_x, "y": table_y, "width": table_r - table_x, "height": table_b - table_y,
+        "columns": columns, "row_heights": row_heights, "cells": cells,
+    }]
+
+
 def detect_tables(boxes: list[dict], lines: list[dict]) -> list[dict]:
     """Detect stacked equal-width row rectangles as a lattice table.
 
     Falls back to line-alignment detection when the PDF has no explicit table
     border boxes (e.g. HWP→PDF vector output where cells are text only).
     """
+    # --- Explicit vector borders are authoritative; use them before text heuristics. ---
+    vector_tables = _detect_vector_grid_tables(boxes, lines)
+    if vector_tables:
+        return vector_tables
     # --- Line-alignment fallback: group lines sharing the same baseline (row)
     #     with 2+ distinct x-start columns into a table. ---
     line_tables = _detect_tables_from_lines(lines)
-    if line_tables:
+    if line_tables and any(len(table.get("columns", [])) >= 2 for table in line_tables):
         return line_tables
 
     if len(boxes) < 2:
