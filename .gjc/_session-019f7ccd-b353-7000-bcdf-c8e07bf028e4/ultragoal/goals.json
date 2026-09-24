@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "brief": "@goal: Fix production PDF-to-HWPX table reconstruction\nMake the actual server HWPX conversion path reconstruct /home/declan/Downloads/converted.pdf as a native editable table with correct page coordinates, merged cells, widths, row heights, borders, cell padding, text, fonts, and alignment. Remove the split between the manually QAed ponslink output and the server HwpForge output. Use rhwp and HwpForge as appropriate, then open the generated HWPX in https://edwardkim.github.io/rhwp/ with browser QA at 100% and 200%, compare to the source PDF, and repeat fixes until the table is visually and structurally correct.",
+  "gjcGoalMode": "aggregate",
+  "gjcObjective": "Complete the durable ultragoal plan in .gjc/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .gjc/ultragoal/ledger.jsonl as the audit trail.",
+  "goals": [
+    {
+      "id": "G001",
+      "title": "Fix production PDF-to-HWPX table reconstruction",
+      "objective": "Make the actual server HWPX conversion path reconstruct /home/declan/Downloads/converted.pdf as a native editable table with correct page coordinates, merged cells, widths, row heights, borders, cell padding, text, fonts, and alignment. Remove the split between the manually QAed ponslink output and the server HwpForge output. Use rhwp and HwpForge as appropriate, then open the generated HWPX in https://edwardkim.github.io/rhwp/ with browser QA at 100% and 200%, compare to the source PDF, and repeat fixes until the table is visually and structurally correct.",
+      "status": "complete",
+      "createdAt": "2026-07-20T09:34:05.741Z",
+      "updatedAt": "2026-07-20T09:55:03.376Z",
+      "pipelineMetadata": {
+        "schemaVersion": 1,
+        "goalId": "G001",
+        "source": "legacy_brief_only",
+        "eligible": false,
+        "dependsOn": [],
+        "independentOf": [],
+        "targets": {
+          "files": [],
+          "surfaces": []
+        },
+        "overlap": "none",
+        "invalidationReason": "missing_pipeline_metadata",
+        "metadataHash": "ee22f050202eddb1df159edbc575f74df1661c7cce97b7394afe3f786d576e94"
+      },
+      "startedAt": "2026-07-20T09:34:16.658Z",
+      "completedAt": "2026-07-20T09:55:03.376Z",
+      "evidence": "Production server HWPX/HWP routes now use the native ponslink exporter. The generated production-table.hwpx contains one 6x5 native table with 17 cells, merged geometry, labels inside cell paragraphs, no text-bearing shapes, and no duplicate body labels. Focused contracts, release exporter build, server build, HWP smoke tests, XML inspection, and live rhwp browser QA at 100% and 200% passed; evidence is in artifacts/fidelity/converted/production-table.hwpx, artifacts/fidelity/converted/rhwp-info.txt, artifacts/fidelity/rhwp/production-table-qa.json, and screenshots.",
+      "completionVerification": {
+        "schemaVersion": 1,
+        "receiptId": "90578c43-14db-4bf1-a13b-f0c1bd8191c5",
+        "verifiedAt": "2026-07-20T09:55:03.376Z",
+        "goalId": "G001",
+        "receiptKind": "final-aggregate",
+        "goalStatusBeforeCheckpoint": "active",
+        "gjcGoalMode": "aggregate",
+        "gjcObjective": "Complete the durable ultragoal plan in .gjc/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .gjc/ultragoal/ledger.jsonl as the audit trail.",
+        "qualityGateHash": "5a9b14f049154363077e06efb64d1fd8a84877c58a97633f147a0e3e980b4178",
+        "planGeneration": "6742615fae8e0b05ad339aa712c35d1dfeab4edd72cb52ab0326d2a6391dc0f4",
+        "basis": {
+          "planHashBeforeCheckpoint": "12402cf7c1efcf4cb99ed2a69b3ead7914d5c66d77e62b2019cc08144153a776",
+          "latestRelevantLedgerEventIdBeforeCheckpoint": "bf9b4e9d-287f-4a63-805c-845281932502",
+          "goalUpdatedAtBeforeCheckpoint": "2026-07-20T09:55:03.376Z",
+          "relevantGoalIdsBeforeCheckpoint": [
+            "G001"
+          ],
+          "requiredGoalSetHashBeforeCheckpoint": "7f02282090b1b6e5858e58022a330e5158974de0af7de74fb4dbcaca73f8a744"
+        },
+        "checkpointLedgerEventId": "77a40f7d-cccb-4b64-b0c0-1d27bc1e4c1a"
+      }
+    }
+  ],
+  "createdAt": "2026-07-20T09:34:05.741Z",
+  "updatedAt": "2026-07-20T09:55:03.376Z",
+  "state_revision": 15
+}

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "source": "/home/declan/Downloads/converted.pdf",
+  "output": "artifacts/fidelity/converted/converted.hwpx",
+  "viewer": "https://edwardkim.github.io/rhwp/",
+  "textPlacement": {
+    "bodyTextNodes": 39,
+    "nonEmptyTableCells": 0,
+    "tableCells": 17,
+    "textBearingShapeControls": 0,
+    "fullPageImage": false,
+    "sourceNonWhitespaceChars": 73,
+    "outputNonWhitespaceChars": 73
+  },
+  "screenshots": [
+    "artifacts/fidelity/rhwp/text-only-100.png",
+    "artifacts/fidelity/rhwp/text-only-200.png"
+  ],
+  "xml": "artifacts/fidelity/converted/section0-native-text.xml",
+  "verdict": "pass"
+}

@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "source": "/home/declan/Downloads/converted.pdf",
+  "output": "artifacts/fidelity/converted/converted.hwpx",
+  "viewer": "https://edwardkim.github.io/rhwp/",
+  "sourcePageCount": 1,
+  "outputPageCount": 1,
+  "sourceNonWhitespaceChars": 73,
+  "outputNonWhitespaceChars": 73,
+  "textRetentionRatio": 1.0,
+  "nativeStructure": {
+    "textParagraphs": 5,
+    "nativeTable": "6x5, 17 cells",
+    "nonTextShapes": 4,
+    "textInShapes": false,
+    "fullPageRasterPrimary": false
+  },
+  "screenshots": [
+    "artifacts/fidelity/rhwp/recheck-native-text.png"
+  ],
+  "xmlEvidence": "artifacts/fidelity/converted/section0-native-text.xml",
+  "focusedTests": [
+    "tests/pdf-to-hwp-exporter-smoke.test.mjs",
+    "tests/pdf-to-hwp-static.test.mjs",
+    "tests/pdf-layout-extract-smoke.test.mjs"
+  ],
+  "verdict": "pass-native-text-and-table"
+}

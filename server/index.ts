@@ -48,8 +48,11 @@ function resolveRhwpPath(): string {
 }
 const RHWP_PATH = resolveRhwpPath();
 const LOCAL_RHWP_INGEST_EXPORTER_PATH = path.resolve(__dirname, '../tools/rhwp-ingest-exporter/target/release/rhwp-ingest-exporter');
+const LOCAL_RHWP_PONSLINK_EXPORTER_PATH = path.resolve(__dirname, '../tools/rhwp-ingest-exporter-ponslink/target/release/rhwp-ingest-exporter');
 const RHWP_INGEST_EXPORTER_PATH = process.env.RHWP_INGEST_EXPORTER_PATH
-  || (fs.existsSync(LOCAL_RHWP_INGEST_EXPORTER_PATH) ? LOCAL_RHWP_INGEST_EXPORTER_PATH : 'rhwp-ingest-exporter');
+  || (fs.existsSync(LOCAL_RHWP_PONSLINK_EXPORTER_PATH)
+    ? LOCAL_RHWP_PONSLINK_EXPORTER_PATH
+    : (fs.existsSync(LOCAL_RHWP_INGEST_EXPORTER_PATH) ? LOCAL_RHWP_INGEST_EXPORTER_PATH : 'rhwp-ingest-exporter'));
 const PDFTOTEXT_PATH = process.env.PDFTOTEXT_PATH || 'pdftotext';
 const PDFTOHTML_PATH = process.env.PDFTOHTML_PATH || 'pdftohtml';
 const PDFTOPPM_PATH = process.env.PDFTOPPM_PATH || 'pdftoppm';
@@ -4041,12 +4044,12 @@ async function handlePdfToHwp(req: PremiumRequest, res: Response, outputFormat: 
     }
     fs.writeFileSync(ingestPath, JSON.stringify(ingest, null, 2), 'utf8');
 
-    if (outputFormat === 'hwpx') {
-      await createStructuredHwpxFromPdfLayout(ingest, outputPath, jobDir);
-    } else {
+    if (outputFormat === 'hwpx' || outputFormat === 'hwp') {
       await execFileAsync(RHWP_INGEST_EXPORTER_PATH, [
         ingestPath, '--media-dir', jobDir, '-o', outputPath, '--format', outputFormat,
       ], { timeout: 120000, env: { ...process.env, LANG: 'ko_KR.UTF-8', LC_ALL: 'ko_KR.UTF-8' } });
+    } else {
+      await createStructuredHwpxFromPdfLayout(ingest, outputPath, jobDir);
     }
 
     if (!fs.existsSync(outputPath)) throw new Error(`${outputFormat.toUpperCase()} 출력 파일이 생성되지 않았습니다.`);

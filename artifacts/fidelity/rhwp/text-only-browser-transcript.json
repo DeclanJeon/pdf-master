@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "kind": "browser-automation-transcript",
+  "tool": "agbrowse",
+  "url": "https://edwardkim.github.io/rhwp/",
+  "actions": [
+    {
+      "type": "navigate",
+      "url": "https://edwardkim.github.io/rhwp/",
+      "result": "loaded",
+      "timestamp": "2026-07-20T01:41:09.141395Z"
+    },
+    {
+      "type": "upload",
+      "selector": "input[type=file]",
+      "path": "artifacts/fidelity/converted/converted.hwpx",
+      "result": "rendered one page",
+      "timestamp": "2026-07-20T01:41:10.141395Z"
+    },
+    {
+      "type": "click",
+      "selector": "button:has-text(로컬 글꼴 감지)",
+      "result": "local fonts applied",
+      "timestamp": "2026-07-20T01:41:11.141395Z"
+    },
+    {
+      "type": "screenshot",
+      "selector": "canvas",
+      "path": "artifacts/fidelity/rhwp/text-only-crop-100.png",
+      "zoom": 100,
+      "result": "passed",
+      "timestamp": "2026-07-20T01:41:12.141395Z"
+    },
+    {
+      "type": "zoom",
+      "selector": "button[title=확대]",
+      "value": 200,
+      "result": "passed",
+      "timestamp": "2026-07-20T01:41:13.141395Z"
+    },
+    {
+      "type": "screenshot",
+      "selector": "canvas",
+      "path": "artifacts/fidelity/rhwp/text-only-crop-200.png",
+      "zoom": 200,
+      "result": "passed",
+      "timestamp": "2026-07-20T01:41:14.141395Z"
+    }
+  ],
+  "verdict": "passed"
+}

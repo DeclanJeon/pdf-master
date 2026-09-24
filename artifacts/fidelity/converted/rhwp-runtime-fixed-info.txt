@@ -1,0 +1,26 @@
+파일: artifacts/fidelity/converted/converted-runtime-fixed.hwpx
+크기: 7098 bytes
+버전: 5.1.0.0
+압축: 아니오
+암호화: 아니오
+배포용: 아니오
+구역 수: 1
+페이지 수: 1
+구역0 용지: 59528×84186 HWPUNIT, 방향=세로 (여백: 좌8504 우8504 상5668 하4252)
+  머리말여백=4252 꼬리말여백=4252 제본여백=0
+폰트(한글): [0]NanumGothic, [1]NanumGothicBold
+폰트(영어): [0]NanumGothic, [1]NanumGothicBold
+폰트(한자): [0]NanumGothic, [1]NanumGothicBold
+폰트(일어): [0]NanumGothic, [1]NanumGothicBold
+폰트(기타): [0]NanumGothic, [1]NanumGothicBold
+폰트(기호): [0]NanumGothic, [1]NanumGothicBold
+폰트(사용자): [0]NanumGothic, [1]NanumGothicBold
+스타일: 바탕글
+총 문단 수: 8
+ParaShape: 4 (PS/문단 = 0.500)
+CharShape: 4 (CS/문단 = 0.500)
+Origin 추정: 판정 불가 (문단 수 ≤ 50, 비율 왜곡 회피)
+도형 [구역0:문단4]: 사각형, size=47830×50, treat_as_char=false, border(color=0x00000000, width=0, attr=0x00000000)
+도형 [구역0:문단5]: 사각형, size=50×59940, treat_as_char=false, border(color=0x00000000, width=0, attr=0x00000000)
+도형 [구역0:문단6]: 사각형, size=40×58430, treat_as_char=false, border(color=0x00000000, width=0, attr=0x00000000)
+표1 [구역0:문단7]: 6행×5열, 셀 17개, 쪽나눔=나누지 않음 (attr=0x00000000), 제목반복=false

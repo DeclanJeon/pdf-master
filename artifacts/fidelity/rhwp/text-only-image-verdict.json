@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "kind": "image-verdict",
+  "surface": "web",
+  "viewer": "https://edwardkim.github.io/rhwp/",
+  "screenshots": [
+    {"path":"artifacts/fidelity/rhwp/text-only-crop-100.png","zoom":100,"verdict":"passed"},
+    {"path":"artifacts/fidelity/rhwp/text-only-crop-200.png","zoom":200,"verdict":"passed"}
+  ],
+  "verdict":"passed"
+}

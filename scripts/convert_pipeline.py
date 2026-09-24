@@ -84,8 +84,9 @@ def convert_pipeline(pdf_path, output_path=None, keep_intermediate=False):
             print(f'중간 파일: {base}.docx, {base}.odt')
         
         print(f'\n[완료] {pdf_path} → {hwpx_path}')
+        if os.path.getsize(hwpx_path) == 0:
+            raise RuntimeError(f'zero-byte output: {hwpx_path}')
         return hwpx_path
-        
     finally:
         if not keep_intermediate:
             shutil.rmtree(tmp_dir, ignore_errors=True)

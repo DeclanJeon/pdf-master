@@ -1,0 +1,161 @@
+  border_fill[0] fill_type=None 
+  border_fill[1] fill_type=None 
+  border_fill[2] fill_type=None 
+  border_fill[3] fill_type=None 
+  border_fill[4] fill_type=None 
+  border_fill[5] fill_type=None 
+  border_fill[6] fill_type=None 
+  border_fill[7] fill_type=None 
+  border_fill[8] fill_type=None 
+  border_fill[9] fill_type=None 
+  border_fill[10] fill_type=None 
+  border_fill[11] fill_type=None 
+  border_fill[12] fill_type=None 
+  border_fill[13] fill_type=None 
+  border_fill[14] fill_type=None 
+  border_fill[15] fill_type=None 
+  border_fill[16] fill_type=None 
+  border_fill[17] fill_type=None 
+=== 구역 0 ===
+  용지: 210.0mm × 297.0mm (59528×84186 HU), 세로
+  여백: 좌=30.0 우=30.0 상=20.0 하=15.0 머리말=15.0 꼬리말=15.0 mm
+
+--- 문단 0.0 --- cc=25, text_len=0, controls=3 [구역나누기]
+  텍스트: (빈 문단)
+  [CS] pos=0 id=0 bold=false spacing=0% ratio=100% base=1000 attr=0x00000000 text=#000000 shade=#FFFFFF shadow=#000000 border_fill_id=0 shadow_type=0 shadow_off=(0, 0) char=""
+  [PS] ps_id=0 align=Left spacing: before=0 after=0 line=100/Percent
+       margins: left=0 right=0 indent=0 border_fill_id=0
+       keep: with_next=false keep_lines=false widow_orphan=false pbreak_before=false (attr1=0x00000180 attr2=0x00000000)
+       tab_def_id=0 auto_left=true auto_right=true tabs=[(없음)]
+  ls[0]: ts=0, vpos=0, lh=200, th=200, bl=170, ls=0, cs=0, sw=0, tag=0x00060000
+  [0] 구역정의: 용지 210.0×297.0mm, 세로, flags=0x00000000
+  [1] 단정의: 1단, 유형=일반, 간격=0.0mm(0), 같은너비=true
+  [2]   [사각형] round=0%
+    선: color=0x00000000, width=0, style=0x0000
+    채우기: None
+    크기: 168.7mm × 0.2mm (47830×50 HU)
+    위치: 가로=용지 오프셋=23.8mm(6755) 정렬=Left, 세로=용지 오프셋=43.8mm(12420) 정렬=Top
+    배치: 글앞으로, 글자처럼=false, z=1000
+    바깥 여백: left=0.00mm(0) right=0.00mm(0) top=0.00mm(0) bottom=0.00mm(0)
+    요소: orig=0×0, curr=0×0, M=[1.000,0.000,0; 0.000,1.000,0], offset=(0,0), eff=0.0mm×0.0mm
+
+--- 문단 0.1 --- cc=9, text_len=0, controls=1 
+  텍스트: (빈 문단)
+  [CS] pos=0 id=0 bold=false spacing=0% ratio=100% base=1000 attr=0x00000000 text=#000000 shade=#FFFFFF shadow=#000000 border_fill_id=0 shadow_type=0 shadow_off=(0, 0) char=""
+  [PS] ps_id=0 align=Left spacing: before=0 after=0 line=100/Percent
+       margins: left=0 right=0 indent=0 border_fill_id=0
+       keep: with_next=false keep_lines=false widow_orphan=false pbreak_before=false (attr1=0x00000180 attr2=0x00000000)
+       tab_def_id=0 auto_left=true auto_right=true tabs=[(없음)]
+  ls[0]: ts=0, vpos=0, lh=200, th=200, bl=170, ls=0, cs=0, sw=0, tag=0x00060000
+  [0]   [사각형] round=0%
+    선: color=0x00000000, width=0, style=0x0000
+    채우기: None
+    크기: 0.2mm × 211.5mm (50×59940 HU)
+    위치: 가로=용지 오프셋=23.7mm(6730) 정렬=Left, 세로=용지 오프셋=43.9mm(12445) 정렬=Top
+    배치: 글앞으로, 글자처럼=false, z=1001
+    바깥 여백: left=0.00mm(0) right=0.00mm(0) top=0.00mm(0) bottom=0.00mm(0)
+    요소: orig=0×0, curr=0×0, M=[1.000,0.000,0; 0.000,1.000,0], offset=(0,0), eff=0.0mm×0.0mm
+
+--- 문단 0.2 --- cc=9, text_len=0, controls=1 
+  텍스트: (빈 문단)
+  [CS] pos=0 id=0 bold=false spacing=0% ratio=100% base=1000 attr=0x00000000 text=#000000 shade=#FFFFFF shadow=#000000 border_fill_id=0 shadow_type=0 shadow_off=(0, 0) char=""
+  [PS] ps_id=0 align=Left spacing: before=0 after=0 line=100/Percent
+       margins: left=0 right=0 indent=0 border_fill_id=0
+       keep: with_next=false keep_lines=false widow_orphan=false pbreak_before=false (attr1=0x00000180 attr2=0x00000000)
+       tab_def_id=0 auto_left=true auto_right=true tabs=[(없음)]
+  ls[0]: ts=0, vpos=0, lh=200, th=200, bl=170, ls=0, cs=0, sw=0, tag=0x00060000
+  [0]   [사각형] round=0%
+    선: color=0x00000000, width=0, style=0x0000
+    채우기: None
+    크기: 0.1mm × 206.1mm (40×58430 HU)
+    위치: 가로=용지 오프셋=192.5mm(54570) 정렬=Left, 세로=용지 오프셋=43.9mm(12450) 정렬=Top
+    배치: 글앞으로, 글자처럼=false, z=1002
+    바깥 여백: left=0.00mm(0) right=0.00mm(0) top=0.00mm(0) bottom=0.00mm(0)
+    요소: orig=0×0, curr=0×0, M=[1.000,0.000,0; 0.000,1.000,0], offset=(0,0), eff=0.0mm×0.0mm
+
+--- 문단 0.3 --- cc=1, text_len=0, controls=0 
+  텍스트: (빈 문단)
+  [CS] pos=0 id=0 bold=false spacing=0% ratio=100% base=1000 attr=0x00000000 text=#000000 shade=#FFFFFF shadow=#000000 border_fill_id=0 shadow_type=0 shadow_off=(0, 0) char=""
+  [PS] ps_id=0 align=Left spacing: before=0 after=0 line=100/Percent
+       margins: left=0 right=0 indent=0 border_fill_id=0
+       keep: with_next=false keep_lines=false widow_orphan=false pbreak_before=false (attr1=0x00000180 attr2=0x00000000)
+       tab_def_id=0 auto_left=true auto_right=true tabs=[(없음)]
+  ls[0]: ts=0, vpos=0, lh=5830, th=5830, bl=4955, ls=0, cs=0, sw=59525, tag=0x00060000
+
+--- 문단 0.4 --- cc=8, text_len=7, controls=0 
+  텍스트: "‘(슬로건)’"
+  [CS] pos=0 id=2 bold=false spacing=0% ratio=100% base=1500 attr=0x00000000 text=#808080 shade=#FFFFFF shadow=#000000 border_fill_id=0 shadow_type=0 shadow_off=(0, 0) char="‘"
+  [PS] ps_id=2 align=Left spacing: before=0 after=0 line=100/Percent
+       margins: left=26730 right=0 indent=0 border_fill_id=0
+       keep: with_next=false keep_lines=false widow_orphan=false pbreak_before=false (attr1=0x00000180 attr2=0x00000000)
+       tab_def_id=0 auto_left=true auto_right=true tabs=[(없음)]
+  ls[0]: ts=0, vpos=0, lh=1530, th=1530, bl=1300, ls=0, cs=0, sw=32795, tag=0x00060000
+
+--- 문단 0.5 --- cc=1, text_len=0, controls=0 
+  텍스트: (빈 문단)
+  [CS] pos=0 id=0 bold=false spacing=0% ratio=100% base=1000 attr=0x00000000 text=#000000 shade=#FFFFFF shadow=#000000 border_fill_id=0 shadow_type=0 shadow_off=(0, 0) char=""
+  [PS] ps_id=0 align=Left spacing: before=0 after=0 line=100/Percent
+       margins: left=0 right=0 indent=0 border_fill_id=0
+       keep: with_next=false keep_lines=false widow_orphan=false pbreak_before=false (attr1=0x00000180 attr2=0x00000000)
+       tab_def_id=0 auto_left=true auto_right=true tabs=[(없음)]
+  ls[0]: ts=0, vpos=0, lh=1000, th=1000, bl=850, ls=0, cs=0, sw=59525, tag=0x00060000
+
+--- 문단 0.6 --- cc=24, text_len=23, controls=0 
+  텍스트: "2026 익산 하기선교 ㅇㅇ교회 자기소개서"
+  [CS] pos=0 id=3 bold=false spacing=0% ratio=100% base=2000 attr=0x00000000 text=#000000 shade=#FFFFFF shadow=#000000 border_fill_id=0 shadow_type=0 shadow_off=(0, 0) char="2"
+  [PS] ps_id=3 align=Left spacing: before=0 after=0 line=100/Percent
+       margins: left=11730 right=0 indent=0 border_fill_id=0
+       keep: with_next=false keep_lines=false widow_orphan=false pbreak_before=false (attr1=0x00000180 attr2=0x00000000)
+       tab_def_id=0 auto_left=true auto_right=true tabs=[(없음)]
+  ls[0]: ts=0, vpos=0, lh=2040, th=2040, bl=1734, ls=0, cs=0, sw=47795, tag=0x00060000
+
+--- 문단 0.7 --- cc=9, text_len=0, controls=1 
+  텍스트: (빈 문단)
+  [CS] pos=0 id=0 bold=false spacing=0% ratio=100% base=1000 attr=0x00000000 text=#000000 shade=#FFFFFF shadow=#000000 border_fill_id=0 shadow_type=0 shadow_off=(0, 0) char=""
+  [PS] ps_id=0 align=Left spacing: before=0 after=0 line=100/Percent
+       margins: left=0 right=0 indent=0 border_fill_id=0
+       keep: with_next=false keep_lines=false widow_orphan=false pbreak_before=false (attr1=0x00000180 attr2=0x00000000)
+       tab_def_id=0 auto_left=true auto_right=true tabs=[(없음)]
+  ls[0]: ts=0, vpos=12455, lh=58410, th=58410, bl=49648, ls=0, cs=0, sw=0, tag=0x00060000
+  [0] 표: 6행×5열, 셀=17, 쪽나눔=None (attr=0x00000000), padding=(0,0,0,0), cs=0
+  [0]   [common] treat_as_char=false, wrap=글앞으로, vert=용지(12455=43.9mm), horz=용지(6758=23.8mm)
+  [0]   [common] size=47831×58410(168.7×206.1mm), valign=Top, halign=Left
+  [0]   [outer_margin] left=0.0mm(0) right=0.0mm(0) top=0.0mm(0) bottom=0.0mm(0)
+  [0]   셀[0] r=0,c=0 rs=3,cs=1 h=16430 w=10873 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=2 paras=1 text=""
+  [0]     p[0] ps_id=1 ctrls=0 text_len=0 ls[0] vpos=0 lh=1000 ls=600
+  [0]   셀[1] r=0,c=1 rs=1,cs=1 h=4630 w=6360 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=3 paras=1 text="이     름"
+  [0]     p[0] ps_id=1 ctrls=0 text_len=11 ls[0] vpos=0 lh=1000 ls=600
+  [0]   셀[2] r=0,c=2 rs=1,cs=1 h=4630 w=13650 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=4 paras=1 text=""
+  [0]     p[0] ps_id=1 ctrls=0 text_len=0 ls[0] vpos=0 lh=1000 ls=600
+  [0]   셀[3] r=0,c=3 rs=1,cs=1 h=4630 w=6590 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=5 paras=1 text="성     별"
+  [0]     p[0] ps_id=1 ctrls=0 text_len=11 ls[0] vpos=0 lh=1000 ls=600
+  [0]   셀[4] r=0,c=4 rs=1,cs=1 h=4630 w=10358 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=6 paras=1 text=""
+  [0]     p[0] ps_id=1 ctrls=0 text_len=0 ls[0] vpos=0 lh=1000 ls=600
+  [0]   셀[5] r=1,c=1 rs=1,cs=1 h=4630 w=6360 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=7 paras=1 text="나이(또래)"
+  [0]     p[0] ps_id=1 ctrls=0 text_len=14 ls[0] vpos=0 lh=1000 ls=600
+  [0]   셀[6] r=1,c=2 rs=1,cs=1 h=4630 w=13650 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=8 paras=1 text=""
+  [0]     p[0] ps_id=1 ctrls=0 text_len=0 ls[0] vpos=0 lh=1000 ls=600
+  [0]   셀[7] r=1,c=3 rs=1,cs=1 h=4630 w=6590 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=9 paras=1 text="직업(전공)"
+  [0]     p[0] ps_id=1 ctrls=0 text_len=14 ls[0] vpos=0 lh=1000 ls=600
+  [0]   셀[8] r=1,c=4 rs=1,cs=1 h=4630 w=10358 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=10 paras=1 text=""
+  [0]     p[0] ps_id=1 ctrls=0 text_len=0 ls[0] vpos=0 lh=1000 ls=600
+  [0]   셀[9] r=2,c=1 rs=1,cs=1 h=7170 w=6360 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=11 paras=1 text="팀 내 사역"
+  [0]     p[0] ps_id=1 ctrls=0 text_len=14 ls[0] vpos=0 lh=1000 ls=600
+  [0]   셀[10] r=2,c=2 rs=1,cs=3 h=7170 w=30598 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=12 paras=1 text=""
+  [0]     p[0] ps_id=1 ctrls=0 text_len=0 ls[0] vpos=0 lh=1000 ls=600
+  [0]   셀[11] r=3,c=0 rs=1,cs=1 h=13420 w=10873 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=13 paras=1 text="하기선교훈련
+지 원  동 기"
+  [0]     p[0] ps_id=1 ctrls=0 text_len=35 ls[0] vpos=0 lh=1000 ls=600
+  [0]   셀[12] r=3,c=1 rs=1,cs=4 h=13420 w=36958 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=14 paras=1 text=""
+  [0]     p[0] ps_id=1 ctrls=0 text_len=0 ls[0] vpos=0 lh=1000 ls=600
+  [0]   셀[13] r=4,c=0 rs=1,cs=1 h=14520 w=10873 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=15 paras=1 text="하기선교훈련
+기대함/소망함"
+  [0]     p[0] ps_id=1 ctrls=0 text_len=38 ls[0] vpos=0 lh=1000 ls=600
+  [0]   셀[14] r=4,c=1 rs=1,cs=4 h=14520 w=36958 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=16 paras=1 text=""
+  [0]     p[0] ps_id=1 ctrls=0 text_len=0 ls[0] vpos=0 lh=1000 ls=600
+  [0]   셀[15] r=5,c=0 rs=1,cs=1 h=14040 w=10873 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=17 paras=1 text="기 도  제 목"
+  [0]     p[0] ps_id=1 ctrls=0 text_len=16 ls[0] vpos=0 lh=1000 ls=600
+  [0]   셀[16] r=5,c=1 rs=1,cs=4 h=14040 w=36958 pad=(900,360,360,180) valign=Center aim=true hdr=false bf=18 paras=1 text=""
+  [0]     p[0] ps_id=1 ctrls=0 text_len=0 ls[0] vpos=0 lh=1000 ls=600
+
+=== 완료: 1 구역, 8 문단 ===

@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "source": "/home/declan/Downloads/converted.pdf",
+  "output": "artifacts/fidelity/converted/converted.hwpx",
+  "pages": 1,
+  "pageSet": [1],
+  "zooms": [100, 200],
+  "sourceScreenshots": ["artifacts/fidelity/source/page-1-100.png", "artifacts/fidelity/source/page-1-200.png"],
+  "outputScreenshots": ["artifacts/fidelity/rhwp/page-1-100-corrected.png", "artifacts/fidelity/rhwp/page-1-200-corrected.png"],
+  "automation": {
+    "url": "https://edwardkim.github.io/rhwp/",
+    "fileUpload": "converted.hwpx",
+    "waitMs": 8000,
+    "localFontDetection": true,
+    "transcript": "browser tab rhwp-final: upload, font detection, 100% screenshot, zoom control to 200%, 200% screenshot"
+  },
+  "evidence": {
+    "nativeText": true,
+    "nativeTable": true,
+    "fullPageRasterPrimary": false,
+    "textRetentionRatio": 1.0,
+    "pageCount": {"source": 1, "output": 1},
+    "geometry": {"titleAndTableAnchorDisplacementMm": 0.0, "method": "source PDF boxes vs exported SVG/HWPX coordinates"},
+    "fontSubstitutions": ["NanumGothic", "NanumGothicBold"]
+  },
+  "verdict": "pass"
+}

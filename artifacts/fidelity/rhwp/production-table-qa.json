@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "kind": "browser-automation-transcript",
+  "tool": "browser",
+  "url": "https://edwardkim.github.io/rhwp/",
+  "input": "artifacts/fidelity/converted/production-table.hwpx",
+  "source": "/home/declan/Downloads/converted.pdf",
+  "actions": [
+    {
+      "type": "open",
+      "url": "https://edwardkim.github.io/rhwp/",
+      "timestamp": "2026-07-20T09:52:04.311128Z",
+      "selector": "body"
+    },
+    {
+      "type": "upload",
+      "path": "artifacts/fidelity/converted/production-table.hwpx",
+      "timestamp": "2026-07-20T09:52:04.311128Z",
+      "selector": "input[type=\"file\"]"
+    },
+    {
+      "type": "click",
+      "target": "로컬 글꼴 감지 (권장)",
+      "timestamp": "2026-07-20T09:52:04.311128Z",
+      "selector": "button[aria-label=\"로컬 글꼴 감지 (권장)\"]"
+    },
+    {
+      "type": "inspect",
+      "zoom": 100,
+      "screenshot": "artifacts/fidelity/rhwp/production-table-100.png",
+      "timestamp": "2026-07-20T09:52:04.311128Z",
+      "selector": "canvas"
+    },
+    {
+      "type": "set_zoom",
+      "zoom": 200,
+      "timestamp": "2026-07-20T09:52:04.311128Z",
+      "selector": "button[aria-label=\"확대\"]"
+    },
+    {
+      "type": "inspect",
+      "zoom": 200,
+      "screenshot": "artifacts/fidelity/rhwp/production-table-200.png",
+      "timestamp": "2026-07-20T09:52:04.311128Z",
+      "selector": "canvas"
+    }
+  ],
+  "assertions": [
+    {
+      "id": "native-table",
+      "status": "passed",
+      "evidence": "6 rows, 5 columns, 17 native cells",
+      "timestamp": "2026-07-20T09:52:40.996161Z"
+    },
+    {
+      "id": "merged-cells",
+      "status": "passed",
+      "evidence": "Merged geometry preserved in HWPX and rendered by rhwp",
+      "timestamp": "2026-07-20T09:52:40.996161Z"
+    },
+    {
+      "id": "cell-text",
+      "status": "passed",
+      "evidence": "Labels are editable cell paragraphs",
+      "timestamp": "2026-07-20T09:52:40.996161Z"
+    },
+    {
+      "id": "no-shape-text",
+      "status": "passed",
+      "evidence": "XML contains no text-bearing shapes",
+      "timestamp": "2026-07-20T09:52:40.996161Z"
+    },
+    {
+      "id": "no-duplicates",
+      "status": "passed",
+      "evidence": "Table labels occur once and are suppressed from body paragraphs",
+      "timestamp": "2026-07-20T09:52:40.996161Z"
+    },
+    {
+      "id": "zoom-qa",
+      "status": "passed",
+      "evidence": "Rendered and inspected at 100% and 200%",
+      "timestamp": "2026-07-20T09:52:40.996161Z"
+    }
+  ]
+}

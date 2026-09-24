@@ -1,0 +1,36 @@
+{
+  "version": 2,
+  "skill": "ralplan",
+  "current_phase": "handoff",
+  "active": false,
+  "handoff_from": "ultragoal",
+  "handoff_at": "2026-07-20T00:17:00.891Z",
+  "updated_at": "2026-07-20T00:17:00.891Z",
+  "receipt": {
+    "version": 1,
+    "skill": "ralplan",
+    "owner": "gjc-state-cli",
+    "command": "gjc state ralplan handoff --to ultragoal",
+    "state_path": "/home/declan/Documents/Develop/Project/pdf-master/.gjc/_session-019f7ccd-b353-7000-bcdf-c8e07bf028e4/state/skill-active-state.json",
+    "storage_path": "/home/declan/Documents/Develop/Project/pdf-master/.gjc/_session-019f7ccd-b353-7000-bcdf-c8e07bf028e4/state/ralplan-state.json",
+    "mutated_at": "2026-07-20T00:17:00.891Z",
+    "fresh_until": "2026-07-20T00:47:00.891Z",
+    "status": "fresh",
+    "mutation_id": "ralplan:handoff:ultragoal:2026-07-20T00:17:00.891Z",
+    "content_sha256": {
+      "algorithm": "sha256",
+      "value": "cbd29bae7af02ae7a4566ad5523c4edb124bb9f8eb4354044d1115327a44be68",
+      "covered_path": "/home/declan/Documents/Develop/Project/pdf-master/.gjc/_session-019f7ccd-b353-7000-bcdf-c8e07bf028e4/state/ralplan-state.json",
+      "computed_at": "2026-07-20T00:17:01.227Z"
+    }
+  },
+  "session_id": "019f7ccd-b353-7000-bcdf-c8e07bf028e4",
+  "run_id": "019f7ccd-b353-7000-bcdf-c8e07bf028e4",
+  "planner_subagent_id": "7-PdfHwpPlannerFinalRevision",
+  "planner_resumable": false,
+  "planner_fallback_reason": "context_unavailable",
+  "planner_fallback_attempted_id": "4-PdfHwpPlannerRevision",
+  "planner_fallback_stage_n": 8,
+  "handoff_to": "ultragoal",
+  "state_revision": 3
+}

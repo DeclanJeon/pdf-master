@@ -888,6 +888,8 @@ def main():
     parser = argparse.ArgumentParser(description="PDF absolute layout extractor for HWP ingest")
     parser.add_argument("input")
     parser.add_argument("--media-dir", default=None)
+    parser.add_argument("--emit-source-metrics", action="store_true",
+                        help="write source metrics to artifacts/fidelity/source-metrics.json")
     parser.add_argument("-o", "--output", default="-")
     args = parser.parse_args()
 
@@ -906,6 +908,34 @@ def main():
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(text, encoding="utf-8")
         print(str(out_path))
+
+    if args.emit_source_metrics:
+        per_page = []
+        for i, page in enumerate(payload.get("pages", [])):
+            lines = page.get("lines", [])
+            glyphs = page.get("glyphs", [])
+            per_page.append({
+                "page": i + 1,
+                "chars": sum(len(line.get("text", "")) for line in lines if line.get("text")),
+                "lines": len(lines),
+                "glyphs": len(glyphs),
+                "images": len(page.get("images", [])),
+                "boxes": len(page.get("boxes", [])),
+                "tables": len(page.get("tables", [])),
+            })
+        metrics = {
+            "source_pdf": args.input,
+            "page_count": len(payload.get("pages", [])),
+            "total_chars": sum(item["chars"] for item in per_page),
+            "per_page": per_page,
+        }
+        metrics_dir = Path("artifacts/fidelity")
+        metrics_dir.mkdir(parents=True, exist_ok=True)
+        (metrics_dir / "source-metrics.json").write_text(
+            json.dumps(metrics, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(str(metrics_dir / "source-metrics.json"))
 
 
 if __name__ == "__main__":

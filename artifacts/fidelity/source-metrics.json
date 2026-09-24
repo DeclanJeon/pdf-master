@@ -1,0 +1,16 @@
+{
+  "source_pdf": "/home/declan/Downloads/converted.pdf",
+  "page_count": 1,
+  "total_chars": 97,
+  "per_page": [
+    {
+      "page": 1,
+      "chars": 97,
+      "lines": 12,
+      "glyphs": 101,
+      "images": 0,
+      "boxes": 34,
+      "tables": 1
+    }
+  ]
+}

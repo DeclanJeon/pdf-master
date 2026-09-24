@@ -1,0 +1,67 @@
+{
+  "active": false,
+  "version": 2,
+  "current_phase": "complete",
+  "skill": "ultragoal",
+  "cwd": "/home/declan/Documents/Develop/Project/pdf-master",
+  "updated_at": "2026-07-20T09:55:24.578Z",
+  "session_id": "019f7ccd-b353-7000-bcdf-c8e07bf028e4",
+  "receipt": {
+    "version": 1,
+    "skill": "ultragoal",
+    "owner": "gjc-runtime",
+    "command": "gjc ultragoal (reconcile)",
+    "state_path": "/home/declan/Documents/Develop/Project/pdf-master/.gjc/_session-019f7ccd-b353-7000-bcdf-c8e07bf028e4/state/skill-active-state.json",
+    "storage_path": "/home/declan/Documents/Develop/Project/pdf-master/.gjc/_session-019f7ccd-b353-7000-bcdf-c8e07bf028e4/state/ultragoal-state.json",
+    "mutated_at": "2026-07-20T09:55:24.578Z",
+    "fresh_until": "2026-07-20T10:25:24.578Z",
+    "status": "fresh",
+    "mutation_id": "ultragoal:reconcile:2026-07-20T09:55:24.578Z",
+    "verb": "reconcile",
+    "from_phase": "complete",
+    "to_phase": "complete",
+    "forced": true,
+    "content_sha256": {
+      "algorithm": "sha256",
+      "value": "29edd0f4fa8e59ebe47fd6f4a625069037cbb98dcaf7654c2cf23939fce5fd72",
+      "covered_path": "/home/declan/Documents/Develop/Project/pdf-master/.gjc/_session-019f7ccd-b353-7000-bcdf-c8e07bf028e4/state/ultragoal-state.json",
+      "computed_at": "2026-07-20T09:55:24.580Z"
+    }
+  },
+  "status": "complete",
+  "goals": [
+    {
+      "id": "G001",
+      "title": "Fix production PDF-to-HWPX table reconstruction",
+      "status": "complete"
+    }
+  ],
+  "counts": {
+    "pending": 0,
+    "active": 0,
+    "complete": 1,
+    "failed": 0,
+    "blocked": 0,
+    "review_blocked": 0,
+    "superseded": 0
+  },
+  "ledger_path": "/home/declan/Documents/Develop/Project/pdf-master/.gjc/_session-019f7ccd-b353-7000-bcdf-c8e07bf028e4/ultragoal/ledger.jsonl",
+  "brief_path": "/home/declan/Documents/Develop/Project/pdf-master/.gjc/_session-019f7ccd-b353-7000-bcdf-c8e07bf028e4/ultragoal/brief.md",
+  "goals_path": "/home/declan/Documents/Develop/Project/pdf-master/.gjc/_session-019f7ccd-b353-7000-bcdf-c8e07bf028e4/ultragoal/goals.json",
+  "handoff_to": "ralplan",
+  "handoff_at": "2026-07-20T00:17:00.891Z",
+  "handoff_from": "ralplan",
+  "gjc_objective": "Complete the durable ultragoal plan in .gjc/ultragoal/goals.json, including later accepted/appended stories, under the original brief constraints; use .gjc/ultragoal/ledger.jsonl as the audit trail.",
+  "nudge_budget": 10,
+  "nudge_count": 0,
+  "nudge_remaining": 10,
+  "nudge_goal_id": "G001",
+  "nudge_target_kind": "final_aggregate_receipt",
+  "latestLedgerEvent": {
+    "event": "goal_checkpointed",
+    "goalId": "G001",
+    "timestamp": "2026-07-20T09:55:03.417Z",
+    "evidence": "Production server HWPX/HWP routes now use the native ponslink exporter. The generated production-table.hwpx contains one 6x5 native table with 17 cells, merged geometry, labels inside cell paragraphs, no text-bearing shapes, and no duplicate body labels. Focused contracts, release exporter build, server build, HWP smoke tests, XML inspection, and live rhwp browser QA at 100% and 200% passed; evidence is in artifacts/fidelity/converted/production-table.hwpx, artifacts/fidelity/converted/rhwp-info.txt, artifacts/fidelity/rhwp/production-table-qa.json, and screenshots."
+  },
+  "state_revision": 32
+}

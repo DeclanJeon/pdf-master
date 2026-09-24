@@ -1646,6 +1646,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
         }
 
         let mut next_table = 0usize;
+        let mut direct_text_paragraphs: Vec<Paragraph> = Vec::new();
         if text_above_background {
             // In the default PDF→HWP mode, the cleaned PDF raster is a behind-text
             // visual guide and the extracted text is emitted as ordinary HWP body
@@ -1691,7 +1692,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                 let h = (line.height.max(1.0) * sy * 1.02).round().max(600.0) as i32;
                 let gap = y.saturating_sub(cursor_y);
                 if gap > 80 {
-                    section.paragraphs.push(spacer_paragraph(gap, page_width as i32));
+                    direct_text_paragraphs.push(spacer_paragraph(gap, page_width as i32));
                 }
 
                 let para_shape_id = doc.doc_info.para_shapes.len() as u16;
@@ -1709,7 +1710,7 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                 let char_shape_id = char_shape_id_for(&font_name, font_size, line.bold, color, 100, 0);
                 let mut paragraph = text_paragraph(text, char_shape_id, h, (page_width as i32 - x.max(0)).max(200));
                 paragraph.para_shape_id = para_shape_id;
-                section.paragraphs.push(paragraph);
+                direct_text_paragraphs.push(paragraph);
                 cursor_y = y.saturating_add(h);
             }
         } else {
@@ -1792,6 +1793,10 @@ fn build_pdf_layout_document(ingest: &IngestDocument, layout: &PdfLayout, media_
                 section.paragraphs.push(table_para);
                 next_table += 1;
             }
+        }
+        if !direct_text_paragraphs.is_empty() {
+            direct_text_paragraphs.append(&mut section.paragraphs);
+            section.paragraphs = direct_text_paragraphs;
         }
 
         if section.paragraphs.is_empty() {

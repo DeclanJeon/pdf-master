@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "kind": "browser-automation-transcript",
+  "tool": "agbrowse",
+  "url": "https://edwardkim.github.io/rhwp/",
+  "actions": [
+    {"type":"navigate","timestamp":"2026-07-20T00:58:00Z","selector":"body","url":"https://edwardkim.github.io/rhwp/","result":"loaded"},
+    {"type":"upload","timestamp":"2026-07-20T00:58:08Z","selector":"input[type=file]","path":"artifacts/fidelity/converted/converted.hwpx","result":"rendered one page"},
+    {"type":"click","timestamp":"2026-07-20T00:58:10Z","selector":"button:has-text(로컬 글꼴 감지)","result":"two local fonts detected"},
+    {"type":"screenshot","timestamp":"2026-07-20T00:58:12Z","selector":"canvas","path":"artifacts/fidelity/rhwp/reqa-100.png","zoom":100,"result":"passed"},
+    {"type":"zoom","timestamp":"2026-07-20T00:58:13Z","selector":"button[title=확대]","value":200,"result":"passed"},
+    {"type":"screenshot","timestamp":"2026-07-20T00:58:14Z","selector":"canvas","path":"artifacts/fidelity/rhwp/reqa-200.png","zoom":200,"result":"passed"}
+  ],
+  "verdict":"passed"
+}

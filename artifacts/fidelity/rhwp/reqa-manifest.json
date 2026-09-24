@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "source": {
+    "pages": 1,
+    "pagePt": [
+      595.2472534179688,
+      841.8613891601562
+    ],
+    "tableBboxPt": [
+      67.57500076293945,
+      124.55038452148438,
+      478.29999923706055,
+      584.1000061035156
+    ],
+    "lines": 12
+  },
+  "output": {
+    "pages": 1,
+    "nativeTable": "6x5/17 cells",
+    "textNodes": 21,
+    "textChars": 117,
+    "textInShape": false,
+    "fullPageImage": false,
+    "fonts": [
+      "NanumGothic",
+      "NanumGothicBold"
+    ],
+    "nativeTextEvidence": "hp:t nodes with hp:lineBreak inside native table cells and paragraphs"
+  },
+  "viewer": "https://edwardkim.github.io/rhwp/",
+  "textComparison": {
+    "sourceNonWhitespace": 73,
+    "outputNonWhitespace": 73,
+    "ratio": 1.0
+  },
+  "screenshots": [
+    "artifacts/fidelity/rhwp/reqa-100.png",
+    "artifacts/fidelity/rhwp/reqa-200.png"
+  ],
+  "xmlEvidence": "artifacts/fidelity/converted/section0-native-text.xml",
+  "infoEvidence": "artifacts/fidelity/converted/rhwp-info.txt",
+  "verdict": "pass"
+}
